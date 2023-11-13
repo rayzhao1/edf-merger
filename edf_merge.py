@@ -1,22 +1,28 @@
-# python3 -m pip install numpy
-import numpy as np
 import os
 import shutil
-import scipy
-
-import pyedflib
-from pyedflib import highlevel
 import mne
 import sys
+import pyedflib
 
 
 """
+Dependencies:
+    1) mne 1.5.1
+    2) Python 3.10+
+    3) EDFlib-Python-1.0.8+
+
+Usage:
+    >>> python3 edf_merge.py <edf-file-path> <[optional] output-file-name>
+
 Script Usage:
     1) Move script into a folder.
     2) Within that folder, create a folder named 'in'.
         - Move EDF files into 'in'.
     3) Execute script from folder directory, i.e.
-        > python3 edf_merge.py
+        >>> python3 edf_merge.py
+        - The default name of the output file is output.edf.
+        - To change this, run the script with a command-line argument. Ex.
+        >>> python3 edf_merge.py desired_name
 """
 
 def trim_and_decim(edf_path, freq):
@@ -30,7 +36,7 @@ def trim_and_decim(edf_path, freq):
     dict = {name: name[4:] for name in data.ch_names}
     data = data.rename_channels(dict)
 
-    # remove non scalp-eeg
+    # Remove non scalp-eeg
     channels = data.ch_names
     scalp_start = channels.index('Fp1-Ref')
     to_drop = channels[:scalp_start]
@@ -71,12 +77,17 @@ def print_edf(raw_edf, name):
     print('Dim:', raw_edf.get_data().shape[0], 'channels', 'x', raw_edf.get_data().shape[1], 'time points\n\n\n')
 
 if __name__ == "__main__":
+    # Set output file name to optional command-line argument, or 'output.edf' if no argument.
     if len(sys.argv) == 1:
         name = 'output'
     else:
         name = sys.argv[1]
     src = os.getcwd()
-    edf_path_in = src + '\\in'
+    sep = os.sep
+    # Navigate to EDF files
+    while os.getcwd() is not sep:
+        os.chdir('..')
+    edf_path_in = src + sep + 'in'
     os.chdir(edf_path_in)
     #for root, folders, files in os.walk(edf_path_in):
 
@@ -89,17 +100,7 @@ if __name__ == "__main__":
     os.chdir(src)
     #mne.export.export_raw('test.edf', merged)
     #export(merged, 'test')
-    new = src + '\\out'
+    new = src + sep + 'out'
     os.mkdir(new)
     os.chdir(new)
     export(merged, name)
-    #src_files = list(sorted(os.listdir(edf_path_in)))
-    #a, b = src_files[0], src_files[1]
-    #print(a, b)
-    #a, b = trim_and_decim(a, 200), trim_and_decim(b, 200)
-"""
-    merged = concat([a, b])
-    print_edf(merged, 'Merged')
-
-    # export
-    export(merged, 'test')"""
