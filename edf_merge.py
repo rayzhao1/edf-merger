@@ -2,8 +2,7 @@ import os
 import shutil
 import mne
 import sys
-import pyedflib
-
+import csv
 
 """
 Dependencies:
@@ -12,17 +11,30 @@ Dependencies:
     3) EDFlib-Python-1.0.8+
 
 Usage:
-    >>> python3 edf_merge.py <edf-file-path> <[optional] output-file-name>
+    python3 edf_merge.py <edf-file-path> <[optional] output-file-name> <[Merge-checking (optional)] False>
 
-Script Usage:
-    1) Move script into a folder.
-    2) Within that folder, create a folder named 'in'.
-        - Move EDF files into 'in'.
-    3) Execute script from folder directory, i.e.
-        >>> python3 edf_merge.py
-        - The default name of the output file is output.edf.
-        - To change this, run the script with a command-line argument. Ex.
-        >>> python3 edf_merge.py desired_name
+    - "Merge-checking" is on by default and will throw an error if the script attempts to merge EDF files that are not time-contiguous. 
+    - However, it is less performant. It can be turned off with an additional argument, False.
+    - The output file is created in the current working directory, in a folder titled 'out'.
+
+Requirements:
+    1) The <edf-file-path> directory stores the EDF files to be merged in a folder with the same name.
+    2) If "Merge-checking" is on, the <edf-file-path> directory contains a '<name>_EDFMeta.csv'.
+
+Example - Valid File Structure:
+    .
+    └── data_store0
+        └── presidio
+            └── nihon_kohden
+                └── PR05
+                    └── PR05
+                        ├── PR05_EDFMeta.csv
+                        └── PR05
+                            ├── PR05_2605.edf
+                            ├── PR05_2606.edf
+                            └── PR05_2607.edf
+                
+    python3 edf_merge.py data_store0/presidio/nihon_kohden/PR05 False
 """
 
 def trim_and_decim(edf_path, freq):
@@ -47,8 +59,12 @@ def trim_and_decim(edf_path, freq):
     print_edf(data, 'Output')   
     return data
 
+def concat(a, b):
+    """Concatenates two mne.io.Raw objects and returns result."""
+    return mne.concatenate_raws(lst)
+
 def concat(lst):
-    """Concatenates and returns two mne.io.Raw objects"""
+    """Concatenates a list of mne.io.Raw objects and returns result."""
     return mne.concatenate_raws(lst)
 
 def bipolar_reference(raw_edf):
@@ -77,30 +93,60 @@ def print_edf(raw_edf, name):
     print('Dim:', raw_edf.get_data().shape[0], 'channels', 'x', raw_edf.get_data().shape[1], 'time points\n\n\n')
 
 if __name__ == "__main__":
-    # Set output file name to optional command-line argument, or 'output.edf' if no argument.
-    if len(sys.argv) == 1:
-        name = 'output'
+    # Process command-line args
+    argc = len(sys.argv)
+    if argc not in range(2, 4):
+        raise Exception("Please run the script in the following format: python3 edf_merge.py <edf-file-path> <[optional] output-file-name>")
+    patient_path = sys.argv[1]
+    if argc == 3:
+        name = sys.argv[2]
     else:
-        name = sys.argv[1]
+        name = 'output'
     src = os.getcwd()
     sep = os.sep
+
     # Navigate to EDF files
     while os.getcwd() is not sep:
         os.chdir('..')
-    edf_path_in = src + sep + 'in'
-    os.chdir(edf_path_in)
-    #for root, folders, files in os.walk(edf_path_in):
+    os.chdir(patient_path)  
 
-    #for root, folders, files in os.walk(edf_path_in):
-        # print(root) - C:\Users\raymo\ray\urap\edf-merger\in
-        # print(list(folders)) - []
-        # print(list(files)) - ['PR03_0010.edf', 'PR03_0011.edf']
-    src_files = list(sorted(os.listdir(edf_path_in)))
-    merged = concat([trim_and_decim(edf, 200) for edf in src_files])
+    csv_name = f'{edf_file}'
+
+    # Merge EDF files
+    patient = os.path.basename(os.getcwd())
+    if f'{patient}_EDFMeta.csv' not in os.listdir():
+        raise Exception("Please provide a .csv file formatted as: <patient>_EDFMeta.csv")
+
+    # Unchecked concatenation
+    # merged = concat([trim_and_decim(edf, 200) for edf in edf_files])
+
+    # Identify start and end based on .csv, PR03_EDFMeta.csv
+    with open(f'{patient}_EDFMeta.csv') as csv_file:
+        csv_reader = csv.reader(csv_file, delimiter=',')
+        line_count = 0
+        start = 0
+        end = 0
+        
+    os.chdir(patient)
+    edf_files = list(sorted(os.listdir()))
+
+    while int(next(edf_files)[-2:]) != start:
+        pass
+    merged = edf_files[0]
+    last = merged[-2:]
+    blank = None
+    start, end = 0, 0
+    for n, edf_file in zip(range(start, end), edf_files): # 11 hrs * 12 recordings/hr = max of 132 files)
+        if int(last) + 1 = int(edf_file[-2:]):
+            merged = concat(merged, edf)
+        else:
+            merged = concat(merged, blank)
+
+    """
+    # Make folder output folder
     os.chdir(src)
-    #mne.export.export_raw('test.edf', merged)
-    #export(merged, 'test')
     new = src + sep + 'out'
     os.mkdir(new)
+    # Export to output folder
     os.chdir(new)
-    export(merged, name)
+    export(merged, name)"""
