@@ -3,6 +3,7 @@ import shutil
 import mne
 import sys
 import csv
+import datetime
 
 """
 Dependencies:
@@ -13,7 +14,7 @@ Dependencies:
 Usage:
     python3 edf_merge.py <edf-file-path> <[optional] output-file-name> <[Merge-checking (optional)] False>
 
-    - "Merge-checking" is on by default and will throw an error if the script attempts to merge EDF files that are not time-contiguous. 
+    - "Merge-checking" is on by default and will throw an error if the script attempts to merge EDF files that are not time-continuous. 
     - However, it is less performant. It can be turned off with an additional argument, False.
     - The output file is created in the current working directory, in a folder titled 'out'.
 
@@ -92,11 +93,41 @@ def print_edf(raw_edf, name):
     print(raw_edf.info)
     print('Dim:', raw_edf.get_data().shape[0], 'channels', 'x', raw_edf.get_data().shape[1], 'time points\n\n\n')
 
-if __name__ == "__main__":
+def get_first_date(csv_in):
+    with open(csv_in) as csv_file:
+        csv_reader = csv.reader(csv_file, delimiter=',')
+        _, first_row = next(csv_reader), next(csv_reader)
+        time_str, time_format = first_row[3], '%Y-%m-%d %H:%M:%S.%f'
+        return datetime.datetime.strptime(time_str, time_format)  
+
+def parse_find(csv_in, start, end, detect=True):
+    """Iterate through 'csv_in' and return the name of the .edf file with 'edf_start' closest to start and 'edf_end' closest to end.
+        - Returns these two respective files as a two-element tuple.
+        - If detect=True, also return a list of files that differ in time from their previous file by an amount >= margin (1.5 min by default).
+    
+    """
+    time_format = '%Y-%m-%d %H:%M:%S.%f'
+    files = []
+    curr = start
+    flag = False
+    with open(csv_in) as csv_file:
+        csv_reader = csv.reader(csv_file, delimiter=',')
+        next(csv_reader)
+        for row in csv_reader:
+            curr = datetime.datetime.strptime(row[3], time_format) 
+            if curr > start:
+                flag = True
+            if not flag:
+                continue
+            if curr > end:
+                break
+            files.append(row[1])
+    return files
+
+if __name__ == "__main__": # can get rid of
     # Process command-line args
     argc = len(sys.argv)
-    if argc not in range(2, 4):
-        raise Exception("Please run the script in the following format: python3 edf_merge.py <edf-file-path> <[optional] output-file-name>")
+    assert argc in range(2, 4), "Please run the script in the following format: python3 edf_merge.py <edf-file-path> <[optional] output-file-name>"
     patient_path = sys.argv[1]
     if argc == 3:
         name = sys.argv[2]
@@ -110,26 +141,44 @@ if __name__ == "__main__":
         os.chdir('..')
     os.chdir(patient_path)  
 
-    csv_name = f'{edf_file}'
-
     # Merge EDF files
     patient = os.path.basename(os.getcwd())
-    if f'{patient}_EDFMeta.csv' not in os.listdir():
-        raise Exception("Please provide a .csv file formatted as: <patient>_EDFMeta.csv")
+    csv_meta = f'{patient}_EDFMeta.csv'
+    print(csv_meta)
+    assert csv_meta in os.listdir(), f'Please provide a .csv file formatted as: {patient}_EDFMeta.csv'
+
+    # 2021-05-25 17:49:59.920000
+    # Identify start and end based on .csv, PR03_EDFMeta.csv
+    t0 = get_first_date(csv_meta)
+    t0.replace(hour = 9, minute = 0, second = 0, microsecond = 0)
+    duration = datetime.timedelta(hours = 11)
+    tf = t0 + duration
+    edf_files = parse_find(csv_meta, t0, tf)
+    merged = concat([trim_and_decim(edf, 200) for edf in edf_files])
+    os.chdir(src)
+    os.mkdir(f'out-{patient}')
+    export(merged, name)
+    """
+    os.chdir(patient)
+    edf_files = os.listdir().sort()
+    if not discontinuous:
+        start, end = edf_files.index(start_file), edf_files.index(end_file)
+        edf_files = edf_files[start:end]
+        merged = concat([trim_and_decim(edf, 200) for edf in edf_files if edf[-4:] == '.edf'])
+
+    # Make folder output folder
+    os.chdir(src)
+    new = src + sep + 'out'
+    os.mkdir(new)
+    # Export to output folder
+    os.chdir(new)
+    export(merged, name)
+    """
 
     # Unchecked concatenation
     # merged = concat([trim_and_decim(edf, 200) for edf in edf_files])
 
-    # Identify start and end based on .csv, PR03_EDFMeta.csv
-    with open(f'{patient}_EDFMeta.csv') as csv_file:
-        csv_reader = csv.reader(csv_file, delimiter=',')
-        line_count = 0
-        start = 0
-        end = 0
-        
-    os.chdir(patient)
-    edf_files = list(sorted(os.listdir()))
-
+    """
     while int(next(edf_files)[-2:]) != start:
         pass
     merged = edf_files[0]
@@ -143,10 +192,86 @@ if __name__ == "__main__":
             merged = concat(merged, blank)
 
     """
-    # Make folder output folder
-    os.chdir(src)
-    new = src + sep + 'out'
-    os.mkdir(new)
-    # Export to output folder
-    os.chdir(new)
-    export(merged, name)"""
+
+
+    """
+
+Extract start date, (datetime, or unix)
+
+set file duration (ex. 11 hours)
+
+inputs:
+- output file duration
+- number of nights (default=run to end)
+
+for every row
+
+return [(start1, end1), (start2, end2), ...]
+
+test = datetime.datetime(2019, 1, 1)
+
+=(D2-DATE(1970,1,1)) * 86400
+
+>>> test = datetime.datetime(2019, 1, 1)
+>>> test
+datetime.datetime(2019, 1, 1, 0, 0)
+>>> print(test)
+2019-01-01 00:00:00
+>>> time = test + timedate.timedelta(hours = 20)
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+NameError: name 'timedate' is not defined
+>>> time = test + datetime.timedelta(hours = 20)
+>>> print(time)
+2019-01-01 20:00:00
+>>> s = 1621964962
+>>> print(s)
+1621964962
+>>> datetime.datetime.utcfromtimestamp(s)
+datetime.datetime(2021, 5, 25, 17, 49, 22)
+>>> a = datetime.datetime.utcfromtimestamp(s)
+>>> datetime.datetime(a.date)
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+TypeError: 'builtin_function_or_method' object cannot be interpreted as an integer
+>>> a.date
+<built-in method date of datetime.datetime object at 0x000001A500E5BAE0>
+>>> print(a.date)
+<built-in method date of datetime.datetime object at 0x000001A500E5BAE0>
+>>> a.date()
+datetime.date(2021, 5, 25)
+
+        #csv_reader = csv.reader(csv_file, delimiter=',')
+        #time_str, time_format = next(csv_reader)[3], '%Y-%m-%d %H:%M:%S.%f'
+        #last = datetime.datetime.strptime(time_str, time_format)
+        csv_reader = csv.reader(csv_file, delimiter=',')
+        next(csv_reader)    # remove header row
+        for row in csv_reader:
+            # If located both indexes, break.
+            if flag == 2 and not detect:
+                break
+            time_str, time_format = row[3], '%Y-%m-%d %H:%M:%S.%f'
+            curr = datetime.datetime.strptime(time_str, time_format)    
+            # Detect discontinuous rows  
+    
+            #if detect and curr - last > margin:
+            #    discontinuous.append(row[0]) 
+            #    flag += 1    
+          
+            # Look for start_file 
+            print(type(curr - target))
+            if flag == 0 and curr >= target: # 11:59 - 12:00, 12:01 - 12:00
+                start_file = row[1]
+                target = end
+                flag += 1
+            # Look for end_index
+            if flag == 1 and curr >= target:
+                end_file = row[1]
+                flag += 1
+            # last = curr
+        return (start_file, end_file, discontinuous) if detect else (start_file, end_file)
+
+datetime object
+parsed_datetime = datetime.strptime(your_date_string, date_format)
+"""
+
