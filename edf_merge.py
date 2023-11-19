@@ -104,24 +104,20 @@ def parse_find(csv_in, start, end, detect=True):
     """Iterate through 'csv_in' and return the name of the .edf file with 'edf_start' closest to start and 'edf_end' closest to end.
         - Returns these two respective files as a two-element tuple.
         - If detect=True, also return a list of files that differ in time from their previous file by an amount >= margin (1.5 min by default).
-    
     """
     time_format = '%Y-%m-%d %H:%M:%S.%f'
     files = []
     curr = start
-    flag = False
     with open(csv_in) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         next(csv_reader)
         for row in csv_reader:
             curr = datetime.datetime.strptime(row[3], time_format) 
-            if curr > start:
-                flag = True
-            if not flag:
+            if curr < start:
                 continue
+            files.append(row[1])
             if curr > end:
                 break
-            files.append(row[1])
     return files
 
 if __name__ == "__main__": # can get rid of
@@ -150,10 +146,11 @@ if __name__ == "__main__": # can get rid of
     # 2021-05-25 17:49:59.920000
     # Identify start and end based on .csv, PR03_EDFMeta.csv
     t0 = get_first_date(csv_meta)
-    t0.replace(hour = 9, minute = 0, second = 0, microsecond = 0)
+    t0 = t0.replace(hour = 21, minute = 0, second = 0, microsecond = 0)
     duration = datetime.timedelta(hours = 11)
     tf = t0 + duration
     edf_files = parse_find(csv_meta, t0, tf)
+    os.chdir(patient)
     merged = concat([trim_and_decim(edf, 200) for edf in edf_files])
     os.chdir(src)
     os.mkdir(f'out-{patient}')
