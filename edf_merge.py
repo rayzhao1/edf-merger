@@ -79,13 +79,13 @@ def average_reference(raw_edf):
 
 def export(raw_edf, target_name, overwrite_existing=True, bipolar=False, common_average=False, bipolar_common_average=False):
     """Export raw object as EDF file"""
-    mne.export.export_raw(target_name + '.edf', raw_edf, overwrite=True)
+    mne.export.export_raw(target_name + '.edf', raw_edf, overwrite_existing)
     if bipolar:
-        mne.export.export_raw(target_name + '-bipolar.edf', bipolar_reference(raw_edf), overwrite=overwrite_existing)
+        mne.export.export_raw(target_name + '-bipolar.edf', bipolar_reference(raw_edf), overwrite_existing)
     if common_average:
-        mne.export.export_raw(target_name + '-common-average.edf', average_reference(raw_edf), overwrite=overwrite_existing)
+        mne.export.export_raw(target_name + '-common-average.edf', average_reference(raw_edf), overwrite_existing)
     if bipolar_common_average:
-        mne.export.export_raw(target_name + '-bipolar-common-average.edf', average_reference(bipolar_reference(raw_edf)), overwrite=overwrite_existing)
+        mne.export.export_raw(target_name + '-bipolar-common-average.edf', average_reference(bipolar_reference(raw_edf)), overwrite_existing)
 
 def print_edf(raw_edf, name):
     """Print basic information about an mne.io.raw object."""
@@ -93,31 +93,47 @@ def print_edf(raw_edf, name):
     print(raw_edf.info)
     print('Dim:', raw_edf.get_data().shape[0], 'channels', 'x', raw_edf.get_data().shape[1], 'time points\n\n\n')
 
+def str_to_time(time_str, time_format='%Y-%m-%d %H:%M:%S.%f'):
+    return datetime.datetime.strptime(time_str, time_format)
+
 def get_first_date(csv_in):
     with open(csv_in) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         _, first_row = next(csv_reader), next(csv_reader)
-        time_str, time_format = first_row[3], '%Y-%m-%d %H:%M:%S.%f'
-        return datetime.datetime.strptime(time_str, time_format)  
+        return str_to_time(first_row[3])  
 
-def parse_find(csv_in, start, end, detect=True):
-    """Iterate through 'csv_in' and return the name of the .edf file with 'edf_start' closest to start and 'edf_end' closest to end.
-        - Returns these two respective files as a two-element tuple.
-        - If detect=True, also return a list of files that differ in time from their previous file by an amount >= margin (1.5 min by default).
-    """
+def parse_find(csv_in, start, end, margin=datetime.timedelta(seconds=15)):
+    """Iterate through 'csv_in' and return a list of lists, where each sublist contains an interval of EDF file names such that each EDF is less than 'margin'
+       away from the previous file in time. This implementation relies on the fact that csv_in is sorted in time-chronological order. All returned EDF files
+       are also constrained to be in the time range between 'start' and 'end'."""
+
     time_format = '%Y-%m-%d %H:%M:%S.%f'
     files = []
-    curr = start
     with open(csv_in) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
-        next(csv_reader)
+        next(csv_reader) # remove header
+
+        row_0 = next(csv_reader) 
+        prev_name, prev_time_end = row_0[1], str_to_time(row_0[4])
+        files.append([prev_name])
+
         for row in csv_reader:
-            curr = datetime.datetime.strptime(row[3], time_format) 
-            if curr < start:
+            curr_name, curr_time_start = row[1], str_to_time(row[3]) 
+            # Do not record files earlier than start.
+            if curr_time_start < start:
                 continue
-            files.append(row[1])
-            if curr > end:
+
+            # If the time difference is large, add a new list subsection.
+            if curr_time_start - prev_time_end > margin:
+                files.append([])
+
+            # Add to list subsection.
+            files[-1].append(curr_name)
+            
+            # Done recording once end time has been exceeded.
+            if curr_time_start > end:
                 break
+            prev_time_end = datetime.datetime.strptime(row[4], time_format)
     return files
 
 if __name__ == "__main__": # can get rid of
@@ -143,132 +159,19 @@ if __name__ == "__main__": # can get rid of
     print(csv_meta)
     assert csv_meta in os.listdir(), f'Please provide a .csv file formatted as: {patient}_EDFMeta.csv'
 
-    # 2021-05-25 17:49:59.920000
     # Identify start and end based on .csv, PR03_EDFMeta.csv
-    t0 = get_first_date(csv_meta)
-    t0 = t0.replace(hour = 21, minute = 0, second = 0, microsecond = 0)
-    duration = datetime.timedelta(hours = 11)
-    tf = t0 + duration
+    t0 = get_first_date(csv_meta) # Set start date
+    t0 = t0.replace(hour=21, minute=0, second=0, microsecond=0) # Set start date and time
+    duration = datetime.timedelta(hours=11) # Set target duration
+    tf = t0 + duration # Set end time
+
+    # Retrieve lists of sublists. Each sublist is a set of continuous, in-range file names.
     edf_files = parse_find(csv_meta, t0, tf)
-    os.chdir(patient)
-    merged = concat([trim_and_decim(edf, 200) for edf in edf_files])
-    os.chdir(src)
-    os.mkdir(f'out-{patient}')
-    export(merged, name)
-    """
-    os.chdir(patient)
-    edf_files = os.listdir().sort()
-    if not discontinuous:
-        start, end = edf_files.index(start_file), edf_files.index(end_file)
-        edf_files = edf_files[start:end]
-        merged = concat([trim_and_decim(edf, 200) for edf in edf_files if edf[-4:] == '.edf'])
-
-    # Make folder output folder
-    os.chdir(src)
-    new = src + sep + 'out'
-    os.mkdir(new)
-    # Export to output folder
-    os.chdir(new)
-    export(merged, name)
-    """
-
-    # Unchecked concatenation
-    # merged = concat([trim_and_decim(edf, 200) for edf in edf_files])
-
-    """
-    while int(next(edf_files)[-2:]) != start:
-        pass
-    merged = edf_files[0]
-    last = merged[-2:]
-    blank = None
-    start, end = 0, 0
-    for n, edf_file in zip(range(start, end), edf_files): # 11 hrs * 12 recordings/hr = max of 132 files)
-        if int(last) + 1 = int(edf_file[-2:]):
-            merged = concat(merged, edf)
-        else:
-            merged = concat(merged, blank)
-
-    """
-
-
-    """
-
-Extract start date, (datetime, or unix)
-
-set file duration (ex. 11 hours)
-
-inputs:
-- output file duration
-- number of nights (default=run to end)
-
-for every row
-
-return [(start1, end1), (start2, end2), ...]
-
-test = datetime.datetime(2019, 1, 1)
-
-=(D2-DATE(1970,1,1)) * 86400
-
->>> test = datetime.datetime(2019, 1, 1)
->>> test
-datetime.datetime(2019, 1, 1, 0, 0)
->>> print(test)
-2019-01-01 00:00:00
->>> time = test + timedate.timedelta(hours = 20)
-Traceback (most recent call last):
-  File "<stdin>", line 1, in <module>
-NameError: name 'timedate' is not defined
->>> time = test + datetime.timedelta(hours = 20)
->>> print(time)
-2019-01-01 20:00:00
->>> s = 1621964962
->>> print(s)
-1621964962
->>> datetime.datetime.utcfromtimestamp(s)
-datetime.datetime(2021, 5, 25, 17, 49, 22)
->>> a = datetime.datetime.utcfromtimestamp(s)
->>> datetime.datetime(a.date)
-Traceback (most recent call last):
-  File "<stdin>", line 1, in <module>
-TypeError: 'builtin_function_or_method' object cannot be interpreted as an integer
->>> a.date
-<built-in method date of datetime.datetime object at 0x000001A500E5BAE0>
->>> print(a.date)
-<built-in method date of datetime.datetime object at 0x000001A500E5BAE0>
->>> a.date()
-datetime.date(2021, 5, 25)
-
-        #csv_reader = csv.reader(csv_file, delimiter=',')
-        #time_str, time_format = next(csv_reader)[3], '%Y-%m-%d %H:%M:%S.%f'
-        #last = datetime.datetime.strptime(time_str, time_format)
-        csv_reader = csv.reader(csv_file, delimiter=',')
-        next(csv_reader)    # remove header row
-        for row in csv_reader:
-            # If located both indexes, break.
-            if flag == 2 and not detect:
-                break
-            time_str, time_format = row[3], '%Y-%m-%d %H:%M:%S.%f'
-            curr = datetime.datetime.strptime(time_str, time_format)    
-            # Detect discontinuous rows  
-    
-            #if detect and curr - last > margin:
-            #    discontinuous.append(row[0]) 
-            #    flag += 1    
-          
-            # Look for start_file 
-            print(type(curr - target))
-            if flag == 0 and curr >= target: # 11:59 - 12:00, 12:01 - 12:00
-                start_file = row[1]
-                target = end
-                flag += 1
-            # Look for end_index
-            if flag == 1 and curr >= target:
-                end_file = row[1]
-                flag += 1
-            # last = curr
-        return (start_file, end_file, discontinuous) if detect else (start_file, end_file)
-
-datetime object
-parsed_datetime = datetime.strptime(your_date_string, date_format)
-"""
-
+    os.chdir(patient)  
+    for i, continuous_interval in enumerate(edf_files):   
+        merged = concat([trim_and_decim(edf, 200) for edf in continuous_interval])
+        os.chdir(src)
+        os.mkdir(f'out-{patient}')
+        export(merged, f'{name}-{i}')
+        os.chdir(patient_path + patient)  
+        assert f'{name}-{i}' in os.listdir(), f'Export failed.'
