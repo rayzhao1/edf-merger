@@ -33,26 +33,33 @@ Example - Valid File Structure:
 """
 
 
-def trim_and_decim(edf_path: str, freq: int) -> mne.io.Raw:
+def to_edf(edf_path: str):
+    source_path = os.getcwd()
+    os.chdir(EDFS_PATH)
+    raw_edf = mne.io.read_raw_edf(edf_path)
+    os.chdir(source_path)
+    return raw_edf
+
+
+def trim_and_decimate(raw_edf: mne.io.Raw, freq: int) -> mne.io.Raw:
     """Takes an EDF file path and returns the EDF data as an mne.io.Raw object with:
         - Only scalp channels included.
         - Resamples input EDF's frequency to 'freq'.
     """
 
-    data: mne.io.Raw = mne.io.read_raw_edf(edf_path)  # alt preload=True, data.get_data() # alt *._data
-    print_edf(data, 'before')
+    print_edf(raw_edf, 'before')
     # Splice away 'POL'
-    rename_dict: dict[str:str] = {name: name[4:] for name in data.ch_names}
-    data: mne.io.Raw = data.rename_channels(rename_dict)
+    rename_dict: dict[str:str] = {name: name[4:] for name in raw_edf.ch_names}
+    raw_edf = raw_edf.rename_channels(rename_dict)
     # Remove non scalp-eeg
-    channels: list[str] = data.ch_names
+    channels: list[str] = raw_edf.ch_names
     scalp_start: int = channels.index('Fp1-Ref')
     to_drop = channels[:scalp_start]
-    scalp_raw = data.drop_channels(to_drop)
+    raw_scalp = raw_edf.drop_channels(to_drop)
     # Decimate 2000 hz to 200hz
-    scalp_raw = scalp_raw.resample(freq)  # internally uses scipy.signal.decimate
-    print_edf(scalp_raw, 'Output')
-    return scalp_raw
+    raw_scalp = raw_scalp.resample(freq)  # internally uses scipy.signal.decimate
+    print_edf(raw_scalp, 'Output')
+    return raw_scalp
 
 
 def concat(lst: list[mne.io.Raw]) -> mne.io.Raw:
@@ -88,10 +95,18 @@ def export(raw_edf: mne.io.Raw, target_name: str, overwrite_existing=True, bipol
 
 
 def print_edf(raw_edf: mne.io.Raw, name: str):
-    """Print basic information about an mne.io.raw object."""
+    """Print basic information about an mne.io.Raw object."""
+    data, time = raw_edf[:, :]
     print(f'\n\n\n\nTesting {name} EDF:\n')
     print(raw_edf.info)
     print('Dim:', raw_edf.get_data().shape[0], 'channels', 'x', raw_edf.get_data().shape[1], 'time points\n\n\n')
+
+
+def write_txt(*txts):
+    with open(os.path.join(os.getcwd(), 'summary.txt'), 'a') as f:
+        for txt in txts:
+            f.write(txt + '\n')
+        f.write('\n\n\n')
 
 
 def str_to_time(time_str: str, time_format='%Y-%m-%d %H:%M:%S.%f'):
@@ -105,20 +120,24 @@ def get_first_date(csv_in: str):
         return str_to_time(first_row[3])
 
 
-def parse_find(csv_in: str, start, end, margin=datetime.timedelta(seconds=15)):
-    """Iterate through 'csv_in' and return a list of lists, where each sublist contains an interval of EDF file names such that each EDF is less than 'margin'
-       away from the previous file in time. This implementation relies on the fact that csv_in is sorted in time-chronological order. All returned EDF files
-       are also constrained to be in the time range between 'start' and 'end'."""
+def parse_find(csv_in: str, start, end, all_files: list[str], margin=datetime.timedelta(seconds=15)) -> list[list[str]]:
+    """Iterate through 'csv_in' and return a list of lists, where each sublist contains an interval of EDF file names
+       such that each EDF is less than 'margin' away from the previous file in time. This implementation relies on the
+       fact that csv_in is sorted in time-chronological order. All returned EDF files are also constrained to be in the
+       time range between 'start' and 'end'.
+    """
 
-    time_format = '%Y-%m-%d %H:%M:%S.%f'
-    files = [[]]
+    source_path: str = os.getcwd()
+    os.chdir(PATIENT_PATH)
+    time_format: str = '%Y-%m-%d %H:%M:%S.%f'
+    files: list[list[str]] = []
     with open(csv_in) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         next(csv_reader)  # remove header
 
         row_0: list[str] = next(csv_reader)
         prev_name, prev_time_end = row_0[1], str_to_time(row_0[4])
-        # files.append([prev_name])
+        files.append([prev_name])
 
         for row in csv_reader:
             curr_name: str = row[1]
@@ -126,70 +145,70 @@ def parse_find(csv_in: str, start, end, margin=datetime.timedelta(seconds=15)):
             # Do not record files earlier than start.
             if curr_time_start < start:
                 continue
-
             # If the time difference is large, add a new list subsection.
             if curr_time_start - prev_time_end > margin:
                 files.append([])
-
             # Add to list subsection.
-            files[-1].append(curr_name)
-
+            if curr_name in all_files:
+                files[-1].append(curr_name)
             # Done recording once end time has been exceeded.
             if curr_time_start > end:
                 break
             prev_time_end: datetime.datetime = datetime.datetime.strptime(row[4], time_format)
-    print('done')
+
+    os.chdir(source_path)
     return files
 
 
 if __name__ == "__main__":  # can get rid of
     # Process command-line args
-    print(sys.argv)
     argc: int = len(sys.argv)
     assert argc in range(2, 4), "Incorrect script parameters. Use "
-    patient_path: str = sys.argv[1]
     if argc == 3:
         name = sys.argv[2]
     else:
         name = 'output'
-    src = os.getcwd()
-    print(src)
-    sep = os.sep
+    SRC_PATH: str = os.getcwd()
 
     # Navigate to EDF files
     for _ in range(1):  # for server: while os.getcwd() is not sep:
         os.chdir('..')
-    home = os.getcwd()
-    os.chdir(patient_path)
+    HOME_PATH: str = os.getcwd()
+    PATIENT_PATH: str = os.path.join(HOME_PATH, sys.argv[1])
+    os.chdir(PATIENT_PATH)
 
-    # Merge EDF files
-    patient = os.path.basename(os.getcwd())
-    csv_meta = f'{patient}_EDFMeta.csv'
-    print(csv_meta)
-    assert csv_meta in os.listdir(), f'Please provide a .csv file formatted as: {patient}_EDFMeta.csv'
+    # Identify file paths
+    PATIENT: str = os.path.basename(os.getcwd())
+    EDFS_PATH: str = os.path.join(HOME_PATH, PATIENT_PATH, PATIENT)
+    csv_meta: str = f'{PATIENT}_EDFMeta.csv'
+    assert csv_meta in os.listdir(), f'Please provide a .csv file formatted as: {PATIENT}_EDFMeta.csv'
 
     # Identify start and end based on .csv, PR03_EDFMeta.csv
-    t0 = get_first_date(csv_meta)  # Set start date
+    t0: datetime.datetime = get_first_date(csv_meta)  # Set start date
     t0 = t0.replace(hour=21, minute=0, second=0, microsecond=0)  # Set start date and time
-    duration = datetime.timedelta(hours=11)  # Set target duration
-    tf = t0 + duration  # Set end time
+    duration: datetime.timedelta = datetime.timedelta(hours=11)  # Set target duration
+    tf: datetime.datetime = t0 + duration  # Set end time
 
     # Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
-    edf_files = parse_find(csv_meta, t0, tf)
-    os.chdir(patient)
-    all_files = os.listdir()
-    print(len(edf_files))
+    os.chdir(EDFS_PATH)
+    all_edfs: list[str] = os.listdir()
+    os.chdir(PATIENT_PATH)
+    edf_files: list[list] = parse_find(csv_meta, t0, tf, all_edfs)
+    os.chdir(os.path.join(SRC_PATH, f'out-{PATIENT}'))
+
+    # Create summary.txt
+    with open(os.path.join(os.getcwd(), 'summary.txt'), 'w') as f:  # Opens file and casts as f
+        f.write('Summary statistics for concatenated EDF files:\n\n')
+
+    # Export one merged file for each continuous time-interval.
     for i, continuous_interval in enumerate(edf_files):
-        print(i, continuous_interval)
         if len(continuous_interval) <= 1:
             continue
-        trimmed = [trim_and_decim(edf, 200) for edf in continuous_interval if edf in all_files]
-        merged = concat(trimmed)
-        os.chdir(src)
-        # os.mkdir(f'out-{patient})
-        os.chdir(f'out-{patient}')
-        out_name = f'{name}-{i}'
+        trimmed: list[mne.io.Raw] = [trim_and_decimate(to_edf(edf), 200) for edf in continuous_interval]
+        merged: mne.io.Raw = concat(trimmed)
+        # os.mkdir(f'out-{PATIENT})
+        out_name: str = f'{name}-{i}'
         export(merged, out_name)
-        assert out_name in os.listdir(), f'Export failed.'
-        os.chdir(home + sep + patient_path + sep + patient)
-        # data, time = raw_obj[:,:]
+        write_txt(f'{out_name} Data:\n', str(merged.info), f'Total concatenated: {len(continuous_interval)}',
+                  f'{merged.get_data().shape[0]} x {merged.get_data().shape[1]}', str(merged.get_data()))
+        assert f'{out_name}.edf' in os.listdir(), f'Export failed. {out_name}.edf not in {os.listdir()}.'
