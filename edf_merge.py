@@ -120,7 +120,7 @@ def get_first_date(csv_in: str):
         return str_to_time(first_row[3])
 
 
-def parse_find(csv_in: str, start, end, all_files: list[str], margin=datetime.timedelta(seconds=15)) -> list[list[str]]:
+def parse_find(csv_in: str, start: datetime.datetime, end: datetime.datetime, all_files: list[str], margin=datetime.timedelta(seconds=15)) -> list[list[str]]:
     """Iterate through 'csv_in' and return a list of lists, where each sublist contains an interval of EDF file names
        such that each EDF is less than 'margin' away from the previous file in time. This implementation relies on the
        fact that csv_in is sorted in time-chronological order. All returned EDF files are also constrained to be in the
@@ -145,15 +145,15 @@ def parse_find(csv_in: str, start, end, all_files: list[str], margin=datetime.ti
             # Do not record files earlier than start.
             if curr_time_start < start:
                 continue
+            # Done recording once end time has been exceeded.
+            if curr_time_start > end:
+                break
             # If the time difference is large, add a new list subsection.
             if curr_time_start - prev_time_end > margin:
                 files.append([])
             # Add to list subsection.
             if curr_name in all_files:
                 files[-1].append(curr_name)
-            # Done recording once end time has been exceeded.
-            if curr_time_start > end:
-                break
             prev_time_end: datetime.datetime = datetime.datetime.strptime(row[4], time_format)
 
     os.chdir(source_path)
@@ -188,6 +188,10 @@ if __name__ == "__main__":  # can get rid of
     t0 = t0.replace(hour=21, minute=0, second=0, microsecond=0)  # Set start date and time
     duration: datetime.timedelta = datetime.timedelta(hours=11)  # Set target duration
     tf: datetime.datetime = t0 + duration  # Set end time
+
+    # testing purposes
+    duration: datetime.timedelta = datetime.timedelta(hours=1)
+    tf: datetime.datetime = t0 + duration
 
     # Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
     os.chdir(EDFS_PATH)
