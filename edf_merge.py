@@ -195,7 +195,7 @@ if __name__ == "__main__":  # can get rid of
 
     # Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
     os.chdir(EDFS_PATH)
-    all_edfs: list[str] = os.listdir()
+    all_edfs: set[str] = set(os.listdir())
     os.chdir(PATIENT_PATH)
     edf_files: list[list] = parse_find(csv_meta, t0, tf, all_edfs)
     os.chdir(os.path.join(SRC_PATH, f'out-{PATIENT}'))
