@@ -40,6 +40,7 @@ def trim_and_decim(edf_path: str, freq: int) -> mne.io.Raw:
     """
 
     data: mne.io.Raw = mne.io.read_raw_edf(edf_path)  # alt preload=True, data.get_data() # alt *._data
+    print_edf(data, 'before')
     # Splice away 'POL'
     rename_dict: dict[str:str] = {name: name[4:] for name in data.ch_names}
     data: mne.io.Raw = data.rename_channels(rename_dict)
@@ -77,13 +78,13 @@ def average_reference(raw_edf: mne.io.Raw) -> mne.io.Raw:
 def export(raw_edf: mne.io.Raw, target_name: str, overwrite_existing=True, bipolar=False, common_average=False,
            bipolar_common_average=False):
     """Export raw object as EDF file"""
-    mne.export.export_raw(target_name + '.edf', raw_edf, overwrite_existing)
+    mne.export.export_raw(target_name + '.edf', raw_edf, overwrite=overwrite_existing)
     if bipolar:
-        mne.export.export_raw(target_name + '-bipolar.edf', bipolar_reference(raw_edf), overwrite_existing)
+        mne.export.export_raw(target_name + '-bipolar.edf', bipolar_reference(raw_edf), overwrite=overwrite_existing)
     if common_average:
-        mne.export.export_raw(target_name + '-common-average.edf', average_reference(raw_edf), overwrite_existing)
+        mne.export.export_raw(target_name + '-common-average.edf', average_reference(raw_edf), overwrite=overwrite_existing)
     if bipolar_common_average:
-        mne.export.export_raw(target_name + '-bipolar-common-average.edf', average_reference(bipolar_reference(raw_edf)), overwrite_existing)
+        mne.export.export_raw(target_name + '-bipolar-common-average.edf', average_reference(bipolar_reference(raw_edf)), overwrite=overwrite_existing)
 
 
 def print_edf(raw_edf: mne.io.Raw, name: str):
@@ -137,6 +138,7 @@ def parse_find(csv_in: str, start, end, margin=datetime.timedelta(seconds=15)):
             if curr_time_start > end:
                 break
             prev_time_end: datetime.datetime = datetime.datetime.strptime(row[4], time_format)
+    print('done')
     return files
 
 
@@ -157,6 +159,7 @@ if __name__ == "__main__":  # can get rid of
     # Navigate to EDF files
     for _ in range(1):  # for server: while os.getcwd() is not sep:
         os.chdir('..')
+    home = os.getcwd()
     os.chdir(patient_path)
 
     # Merge EDF files
@@ -180,10 +183,13 @@ if __name__ == "__main__":  # can get rid of
         print(i, continuous_interval)
         if len(continuous_interval) <= 1:
             continue
-        merged = concat([trim_and_decim(edf, 200) for edf in continuous_interval if edf in all_files])
+        trimmed = [trim_and_decim(edf, 200) for edf in continuous_interval if edf in all_files]
+        merged = concat(trimmed)
         os.chdir(src)
+        # os.mkdir(f'out-{patient})
         os.chdir(f'out-{patient}')
-        export(merged, f'{name}-{i}')
-        os.chdir(patient_path + patient)
+        out_name = f'{name}-{i}'
+        export(merged, out_name)
+        assert out_name in os.listdir(), f'Export failed.'
+        os.chdir(home + sep + patient_path + sep + patient)
         # data, time = raw_obj[:,:]
-        assert f'{name}-{i}' in os.listdir(), f'Export failed.'
