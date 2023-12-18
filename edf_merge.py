@@ -1,4 +1,5 @@
 import os
+import shutil
 import mne
 import sys
 import csv
@@ -49,7 +50,7 @@ def trim_and_decimate(raw_edf: mne.io.Raw, freq: int) -> mne.io.Raw:
 
     print_edf(raw_edf, 'before')
     # Splice away 'POL'
-    rename_dict: dict[str:str] = {name: name[4:] for name in raw_edf.ch_names}
+    rename_dict: dict[str: str] = {name: name[4:] for name in raw_edf.ch_names}
     raw_edf = raw_edf.rename_channels(rename_dict)
     # Remove non scalp-eeg
     channels: list[str] = raw_edf.ch_names
@@ -62,7 +63,7 @@ def trim_and_decimate(raw_edf: mne.io.Raw, freq: int) -> mne.io.Raw:
     return raw_scalp
 
 
-def concat(lst: list[mne.io.Raw]) -> mne.io.Raw:
+def concatenate(lst: list[mne.io.Raw]) -> mne.io.Raw:
     """Concatenates a list of mne.io.Raw objects and returns result."""
 
     return mne.concatenate_raws(lst)
@@ -85,13 +86,13 @@ def average_reference(raw_edf: mne.io.Raw) -> mne.io.Raw:
 def export(raw_edf: mne.io.Raw, target_name: str, overwrite_existing=True, bipolar=False, common_average=False,
            bipolar_common_average=False):
     """Export raw object as EDF file"""
-    mne.export.export_raw(target_name + '.edf', raw_edf, overwrite=overwrite_existing)
+    mne.export.export_raw(f'{target_name}.edf', raw_edf, 'edf', overwrite=overwrite_existing)
     if bipolar:
-        mne.export.export_raw(target_name + '-bipolar.edf', bipolar_reference(raw_edf), overwrite=overwrite_existing)
+        mne.export.export_raw(f'{target_name}-bipolar.edf', bipolar_reference(raw_edf), 'edf', overwrite=overwrite_existing)
     if common_average:
-        mne.export.export_raw(target_name + '-common-average.edf', average_reference(raw_edf), overwrite=overwrite_existing)
+        mne.export.export_raw(f'{target_name}-common-average.edf', average_reference(raw_edf), 'edf', overwrite=overwrite_existing)
     if bipolar_common_average:
-        mne.export.export_raw(target_name + '-bipolar-common-average.edf', average_reference(bipolar_reference(raw_edf)), overwrite=overwrite_existing)
+        mne.export.export_raw(f'{target_name}-bipolar-common-average.edf', average_reference(bipolar_reference(raw_edf)), 'edf', overwrite=overwrite_existing)
 
 
 def print_edf(raw_edf: mne.io.Raw, name: str):
@@ -102,9 +103,9 @@ def print_edf(raw_edf: mne.io.Raw, name: str):
     print('Dim:', raw_edf.get_data().shape[0], 'channels', 'x', raw_edf.get_data().shape[1], 'time points\n\n\n')
 
 
-def write_txt(*txts):
+def write_txt(*args):
     with open(os.path.join(os.getcwd(), 'summary.txt'), 'a') as f:
-        for txt in txts:
+        for txt in args:
             f.write(txt + '\n')
         f.write('\n\n\n')
 
@@ -120,7 +121,7 @@ def get_first_date(csv_in: str):
         return str_to_time(first_row[3])
 
 
-def parse_find(csv_in: str, start: datetime.datetime, end: datetime.datetime, all_files: list[str], margin=datetime.timedelta(seconds=15)) -> list[list[str]]:
+def parse_find(csv_in: str, start: datetime.datetime, end: datetime.datetime, all_files: set[str], margin=datetime.timedelta(seconds=15), limit: float = float('inf')) -> list[list[str]]:
     """Iterate through 'csv_in' and return a list of lists, where each sublist contains an interval of EDF file names
        such that each EDF is less than 'margin' away from the previous file in time. This implementation relies on the
        fact that csv_in is sorted in time-chronological order. All returned EDF files are also constrained to be in the
@@ -131,12 +132,14 @@ def parse_find(csv_in: str, start: datetime.datetime, end: datetime.datetime, al
     os.chdir(PATIENT_PATH)
     time_format: str = '%Y-%m-%d %H:%M:%S.%f'
     files: list[list[str]] = []
+    count: int = 0
     with open(csv_in) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         next(csv_reader)  # remove header
 
         row_0: list[str] = next(csv_reader)
-        prev_name, prev_time_end = row_0[1], str_to_time(row_0[4])
+        prev_name: str = row_0[1]
+        prev_time_end: datetime.datetime = str_to_time(row_0[4])
         files.append([prev_name])
 
         for row in csv_reader:
@@ -145,15 +148,16 @@ def parse_find(csv_in: str, start: datetime.datetime, end: datetime.datetime, al
             # Do not record files earlier than start.
             if curr_time_start < start:
                 continue
-            # Done recording once end time has been exceeded.
-            if curr_time_start > end:
+            # Done recording once endtime has been exceeded.
+            if curr_time_start > end or count >= limit:
                 break
             # If the time difference is large, add a new list subsection.
             if curr_time_start - prev_time_end > margin:
                 files.append([])
-            # Add to list subsection.
+            # Add to list subsection, if the file exists.
             if curr_name in all_files:
                 files[-1].append(curr_name)
+                count += 1
             prev_time_end: datetime.datetime = datetime.datetime.strptime(row[4], time_format)
 
     os.chdir(source_path)
@@ -163,15 +167,23 @@ def parse_find(csv_in: str, start: datetime.datetime, end: datetime.datetime, al
 if __name__ == "__main__":  # can get rid of
     # Process command-line args
     argc: int = len(sys.argv)
-    assert argc in range(2, 4), "Incorrect script parameters. Use "
-    if argc == 3:
-        name = sys.argv[2]
-    else:
-        name = 'output'
-    SRC_PATH: str = os.getcwd()
+    limit: float = float('inf')
+    name, tag = 'output', ''
+    assert argc in range(2, 5), "Incorrect script parameters. Use {...}"
+    if argc == 4:
+        tag = sys.argv[2]
+        limit = float(sys.argv[3])
+    elif argc == 3 and sys.argv[2].isnumeric():
+        limit = float(sys.argv[2])
+    elif argc == 3:
+        tag = sys.argv[2]
 
+    if tag:
+        tag = '-' + tag
+
+    SRC_PATH: str = os.getcwd()
     # Navigate to EDF files
-    for _ in range(1):  # for server: while os.getcwd() is not sep:
+    while os.getcwd() is not os.sep:  # for server: for _ in range(1):
         os.chdir('..')
     HOME_PATH: str = os.getcwd()
     PATIENT_PATH: str = os.path.join(HOME_PATH, sys.argv[1])
@@ -189,16 +201,16 @@ if __name__ == "__main__":  # can get rid of
     duration: datetime.timedelta = datetime.timedelta(hours=11)  # Set target duration
     tf: datetime.datetime = t0 + duration  # Set end time
 
-    # testing purposes
-    duration: datetime.timedelta = datetime.timedelta(hours=1)
-    tf: datetime.datetime = t0 + duration
-
     # Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
     os.chdir(EDFS_PATH)
     all_edfs: set[str] = set(os.listdir())
     os.chdir(PATIENT_PATH)
-    edf_files: list[list] = parse_find(csv_meta, t0, tf, all_edfs)
-    os.chdir(os.path.join(SRC_PATH, f'out-{PATIENT}'))
+    edf_files: list[list] = parse_find(csv_meta, t0, tf, all_edfs, limit=limit)
+    out_dir = os.path.join(SRC_PATH, f'out-{PATIENT}{tag}')
+    if os.path.exists(out_dir):
+        shutil.rmtree(out_dir)
+    os.mkdir(out_dir)
+    os.chdir(out_dir)
 
     # Create summary.txt
     with open(os.path.join(os.getcwd(), 'summary.txt'), 'w') as f:  # Opens file and casts as f
@@ -208,9 +220,17 @@ if __name__ == "__main__":  # can get rid of
     for i, continuous_interval in enumerate(edf_files):
         if len(continuous_interval) <= 1:
             continue
-        trimmed: list[mne.io.Raw] = [trim_and_decimate(to_edf(edf), 200) for edf in continuous_interval]
-        merged: mne.io.Raw = concat(trimmed)
-        # os.mkdir(f'out-{PATIENT})
+        # Verbose for testing
+        write_txt(f'Interval {i} Data:')
+        trimmed: list[mne.io.Raw] = []
+        for edf in continuous_interval:
+            res = trim_and_decimate(to_edf(edf), 200)
+            write_txt(str(res.info))
+            write_txt(f'{res.get_data().shape[0]} x {res.get_data().shape[1]}')
+            trimmed.append(res)
+
+        # One liner -> trimmed: list[mne.io.Raw] = [trim_and_decimate(to_edf(edf), 200) for edf in continuous_interval]
+        merged: mne.io.Raw = concatenate(trimmed)
         out_name: str = f'{name}-{i}'
         export(merged, out_name)
         write_txt(f'{out_name} Data:\n', str(merged.info), f'Total concatenated: {len(continuous_interval)}',
