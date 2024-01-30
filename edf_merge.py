@@ -66,7 +66,7 @@ def to_edf(edf_path: str):
     return raw_edf
 
 
-def trim_and_decimate(raw_edf: mne.io.Raw, freq: int) -> mne.io.Raw:
+def scalp_trim_and_decimate(raw_edf: mne.io.Raw, freq: int) -> mne.io.Raw:
     """Takes an EDF file path and returns the EDF data as an mne.io.Raw object with:
         - Only scalp channels included.
         - Resamples input EDF's frequency to 'freq'.
@@ -74,7 +74,10 @@ def trim_and_decimate(raw_edf: mne.io.Raw, freq: int) -> mne.io.Raw:
 
     print_edf(raw_edf, 'before')
     # Splice away 'POL'
+    # raw_edf = raw_edf.rename_channels(lambda name: name[4:])
     rename_dict: dict[str: str] = {name: name[4:] for name in raw_edf.ch_names}
+    rename_dict['POL L EOG-Ref'], rename_dict['POL R EOG-Ref'] = 'L_EOG-Ref', 'R_EOG-Ref'
+    rename_dict['POL L EMG-Ref'], rename_dict['POL R EMG-Ref'] = 'L_EMG-Ref', 'R_EMG-Ref'
     raw_edf = raw_edf.rename_channels(rename_dict)
     # Remove non scalp-eeg
     channels: list[str] = raw_edf.ch_names
@@ -97,13 +100,14 @@ def concatenate(a: mne.io.Raw, b: mne.io.Raw) -> mne.io.Raw:
 
     return mne.concatenate_raws([a, b])
 
-def bipolar_reference(raw_edf: mne.io.Raw) -> mne.io.Raw:
+def scalp_bipolar_reference(raw_edf: mne.io.Raw) -> mne.io.Raw:
     cathodes = ['Fp1-Ref', 'F7-Ref', 'T7-Ref', 'P7-Ref', 'Fp1-Ref', 'F3-Ref', 'C3-Ref', 'P3-Ref', 'Fz-Ref', 'Cz-Ref',
-                'Fp2-Ref', 'F4-Ref', 'C4-Ref', 'P4-Ref', 'Fp2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref']
+                'Fp2-Ref', 'F4-Ref', 'C4-Ref', 'P4-Ref', 'Fp2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'L_EOG-Ref',  'R_EOG-Ref', 'L_EMG-Ref']
     anodes = ['F7-Ref', 'T7-Ref', 'P7-Ref', 'O1-Ref', 'F3-Ref', 'C3-Ref', 'P3-Ref', 'O1-Ref', 'Cz-Ref', 'Pz-Ref',
-              'F4-Ref', 'C4-Ref', 'P4-Ref', 'O2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'O2-Ref']
-    names = ['Fp1_F7', 'F7_T7', 'T7_P7', 'P7_O1', 'Fp1_F3', 'F3_C3', 'C3_P3', 'P3_O1', 'Fz_Cz', 'Cz_Pz', 'Fp2_F4',
-             'F4_C4', 'C4_P4', 'P4_O2', 'Fp2_F8', 'F8_T8', 'T8_P8', 'P8_O2']
+              'F4-Ref', 'C4-Ref', 'P4-Ref', 'O2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'O2-Ref', 'A2-Ref', 'A1-Ref', 'R_EMG-Ref']
+    names = ['Fp1_F7', 'F7_T7', 'T7_P7', 'P7_O1', 'Fp1_F3', 'F3_C3', 'C3_P3', 'P3_O1', 'Fz_Cz', 'Cz_Pz',
+             'Fp2_F4', 'F4_C4', 'C4_P4', 'P4_O2', 'Fp2_F8', 'F8_T8', 'T8_P8', 'P8_O2', 'L-EOG_A2', 'R-EOG_A1', 'L-EMG_R-EMG']
+    assert len(cathodes) == len(anodes) == len(names), 'Incorrect cathodes, anodes, names input to bipolar_reference()'
     return mne.set_bipolar_reference(raw_edf, anodes, cathodes, names)
 
 
@@ -116,35 +120,35 @@ def export(raw_edf: mne.io.Raw, target_name: str, mode: str, overwrite_existing=
     name: str = f'{target_name}.edf'
     match mode:
         case 'bipolar':
-            mne.export.export_raw(name, bipolar_reference(raw_edf), 'edf', overwrite=overwrite_existing)
+            mne.export.export_raw(name, scalp_bipolar_reference(raw_edf), 'edf', overwrite=overwrite_existing)
         case 'common_average':
             mne.export.export_raw(name, average_reference(raw_edf), 'edf', overwrite=overwrite_existing)
         case 'bipolar_common_average':
-            mne.export.export_raw(name, average_reference(bipolar_reference(raw_edf)), 'edf', overwrite=overwrite_existing)
+            mne.export.export_raw(name, average_reference(scalp_bipolar_reference(raw_edf)), 'edf', overwrite=overwrite_existing)
         case _: # default
             mne.export.export_raw(name, raw_edf, 'edf', overwrite=overwrite_existing)
 
 
-def print_edf(raw_edf: mne.io.Raw, name: str):
+def print_edf(raw_edf: mne.io.Raw, name: str) -> None:
     """Print basic information about an mne.io.Raw object."""
-    data, time = raw_edf[:, :]
+    # data, time = raw_edf[:, :]
     print(f'\n\n\n\nTesting {name} EDF:\n')
     print(raw_edf.info)
     print('Dim:', raw_edf.get_data().shape[0], 'channels', 'x', raw_edf.get_data().shape[1], 'time points\n\n\n')
 
 
-def write_txt(*args):
+def write_txt(*args) -> None:
     with open(os.path.join(os.getcwd(), 'summary.txt'), 'a') as f:
         for txt in args:
             f.write(txt + '\n')
         f.write('\n\n\n')
 
 
-def str_to_time(time_str: str, time_format='%Y-%m-%d %H:%M:%S.%f'):
+def str_to_time(time_str: str, time_format='%Y-%m-%d %H:%M:%S.%f') -> None:
     return datetime.datetime.strptime(time_str, time_format)
 
 
-def get_first_date(csv_in: str):
+def get_first_date(csv_in: str) -> None:
     with open(csv_in) as csv_file:
         csv_reader: csv.reader = csv.reader(csv_file, delimiter=',')
         _, first_row = next(csv_reader), next(csv_reader)
@@ -207,13 +211,12 @@ if __name__ == "__main__":  # can get rid of
         limit = float(sys.argv[2])
     elif argc == 3:
         tag = sys.argv[2]
-
     if tag:
         tag = '-' + tag
 
     SRC_PATH: str = os.getcwd()
     # Navigate to EDF files
-    while os.getcwd() is not os.sep: # for server: for _ in range(1):
+    while os.getcwd() is not os.sep: # for testing for _ in range(1):
         os.chdir('..')
     HOME_PATH: str = os.getcwd()
     PATIENT_PATH: str = os.path.join(HOME_PATH, sys.argv[1])
@@ -253,17 +256,20 @@ if __name__ == "__main__":  # can get rid of
         # Verbose for testing
         write_txt(f'Interval {i} Data:')
         merged = continuous_interval.files.pop(0)
-        merged = trim_and_decimate(to_edf(merged), 200)
+        #fix print(to_edf(merged).ch_names)
+        merged = scalp_trim_and_decimate(to_edf(merged), 200)
         for edf in continuous_interval.files:
-            res = trim_and_decimate(to_edf(edf), 200)
+            res = scalp_trim_and_decimate(to_edf(edf), 200)
             write_txt(str(res.info))
             write_txt(f'{res.get_data().shape[0]} x {res.get_data().shape[1]}')
             merged = concatenate(merged, res)
 
         # One liner -> trimmed: list[mne.io.Raw] = [trim_and_decimate(to_edf(edf), 200) for edf in continuous_interval]
-        #merged: mne.io.Raw = concatenate(trimmed)
+        # merged: mne.io.Raw = concatenate(trimmed)
         out_name: str = f'{name}-{i}{tag}'
-        export(merged, out_name, 'bipolar')
+        export(merged, out_name, 'bipolar') #fix
+        # print('merged:', merged.ch_names)
+        # print('bipolar:', scalp_bipolar_reference(merged).ch_names)
         write_txt(f'{out_name} Data:\n', str(merged.info), f'Total concatenated: {len(continuous_interval)}',
                   f'{merged.get_data().shape[0]} x {merged.get_data().shape[1]}', str(merged.get_data()))
         assert f'{out_name}.edf' in os.listdir(), f'Export failed. {out_name}.edf not in {os.listdir()}.'
