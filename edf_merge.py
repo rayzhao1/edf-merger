@@ -38,53 +38,32 @@ Example - Valid File Structure:
 # each night will be composed of several intervals.
 
 # data_store0/presidio/Nihon.../PR06/PR06_night_scalp_eeg/
-FILE_CONCAT_LIMIT: int = 72 # empirically determined maximum limit to EDF concatenation = 9.17 hr
-DAY_START = 0
+FILE_CONCAT_LIMIT: int = 72  # empirically determined maximum limit to EDF concatenation = 9.17 hr
+NIGHT_DURATION: datetime.timedelta = datetime.timedelta(minutes = 15) # hours=11)
 
 
 class Night:
-    def __init__(self, intervals=[]):
-        self.intervals: list[Interval] = intervals
-        self.num = 0
-        # self.night
-
-    def __len__(self):
-        return len(self.intervals)
+    def __init__(self):
+        self.intervals: list[Interval] = []
 
     def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self.pos == len(self.intervals):
-            return StopIteration
-        val = self.intervals[self.pos]
-        self.pos += 1
-        return val
+        yield from self.intervals
 
     def add(self, file):
         self.intervals.append(file)
 
 
 class Interval:
-    def __init__(self, files=[]):
-        self.files: list[str] = files
-        self.start = None
-        self.end = None
-        self.pos = 0
-        # self.night
+    def __init__(self, t0=None, tf=None):
+        self.files: list[str] = []
+        self.t0 = t0
+        self.tf = tf
 
     def __len__(self):
         return len(self.files)
 
     def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self.pos == len(self.files):
-            return StopIteration
-        val = self.files[self.pos]
-        self.pos += 1
-        return val
+        yield from self.files
 
     def add(self, file):
         self.files.append(file)
@@ -189,12 +168,15 @@ def get_first_date(csv_in: str) -> datetime.datetime:
         return str_to_time(first_row[3])
 
 
-def parse_find(csv_in: str, start: datetime.datetime, all_files: set[str], margin=datetime.timedelta(seconds=15)) -> list[Night]:
+def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(seconds=15)) -> list[Night]:
     """Iterate through 'csv_in' and return a list of lists, where each sublist contains an interval of EDF file names
        such that each EDF is less than 'margin' away from the previous file in time. This implementation relies on the
        fact that csv_in is sorted in time-chronological order. All returned EDF files are also constrained to be in the
        time range between 'start' and 'end'.
     """
+    start: datetime.datetime = get_first_date(csv_meta)  # Set start date
+    start = start.replace(hour=21, minute=0, second=0, microsecond=0)  # Set start date and time
+    end: datetime.datetime = start + NIGHT_DURATION  # Set end time
 
     source_path: str = os.getcwd()
     os.chdir(PATIENT_PATH)
@@ -202,9 +184,8 @@ def parse_find(csv_in: str, start: datetime.datetime, all_files: set[str], margi
     nights: list[Night] = []
     curr_night: Night = Night()
     curr_interval: Interval = Interval()
-    curr_date: datetime.datetime = None
     count: int = 0
-    t0, tf = None, None
+
     with open(csv_in) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         next(csv_reader)  # remove header
@@ -212,6 +193,7 @@ def parse_find(csv_in: str, start: datetime.datetime, all_files: set[str], margi
         row_0: list[str] = next(csv_reader)
         prev_name: str = row_0[1]
         prev_time_end: datetime.datetime = str_to_time(row_0[4])
+        curr_interval.t0 = str_to_time(row_0[3])
         curr_interval.add(prev_name)
 
         for row in csv_reader:
@@ -220,18 +202,22 @@ def parse_find(csv_in: str, start: datetime.datetime, all_files: set[str], margi
             # Do not record files earlier than start, or file names that cannot be found in folder.
             if curr_time_start < start or curr_name not in all_files:
                 continue
-            # If the date changes, then we append a new night.
-            if curr_date != curr_time_start.day:
+            # If we exceed the interval length, add a new night
+            if curr_time_start >= end: #curr_date != curr_time_start.day:
                 nights.append(curr_night)
+                curr_interval = Interval(t0=curr_time_start)
                 curr_night = Night()
+                start = start.replace(hour=21, minute=0, second=0, microsecond=0)  # Set start date and time
+                end = start + NIGHT_DURATION
             # If the time difference is large, add a new Interval for the current night.
             if curr_time_start - prev_time_end > margin or count > FILE_CONCAT_LIMIT:
+                curr_interval.tf = prev_time_end
                 curr_night.add(curr_interval)
-                curr_interval = Interval()
+                curr_interval = Interval(t0=curr_time_start)
                 count = 0
             # Add to list subsection, if the file exists.
             curr_interval.add(curr_name)
-            prev_time_end: datetime.datetime = datetime.datetime.strptime(row[4], time_format)
+            prev_time_end = datetime.datetime.strptime(row[4], time_format)
             count += 1
 
     os.chdir(source_path)
@@ -253,10 +239,10 @@ if __name__ == "__main__":  # can get rid of
         tag = sys.argv[2]
     if tag:
         tag = '-' + tag
-
+    print(name, tag, argc)
     SRC_PATH: str = os.getcwd()
     # Navigate to EDF files
-    while os.getcwd() is not os.sep: # for testing for _ in range(1):
+    for _ in range(1): # while os.getcwd() is not os.sep: # for testing for _ in range(1):
         os.chdir('..')
     HOME_PATH: str = os.getcwd()
     PATIENT_PATH: str = os.path.join(HOME_PATH, sys.argv[1])
@@ -268,17 +254,12 @@ if __name__ == "__main__":  # can get rid of
     csv_meta: str = f'{PATIENT}_EDFMeta.csv'
     assert csv_meta in os.listdir(), f'Please provide a .csv file formatted as: {PATIENT}_EDFMeta.csv'
 
-    # Identify start and end based on .csv, PR03_EDFMeta.csv
-    t0: datetime.datetime = get_first_date(csv_meta)  # Set start date
-    t0 = t0.replace(hour=21, minute=0, second=0, microsecond=0)  # Set start date and time
-    duration: datetime.timedelta = datetime.timedelta(hours=11)  # Set target duration
-    tf: datetime.datetime = t0 + duration  # Set end time
-
     # Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
     os.chdir(EDFS_PATH)
     all_edfs: set[str] = set(os.listdir())
     os.chdir(PATIENT_PATH)
-    nights: list[Night] = parse_find(csv_meta, t0, tf, all_edfs, limit=limit)
+    nights: list[Night] = parse_find(csv_meta, all_edfs)
+    print(nights)
     out_dir = os.path.join(SRC_PATH, f'out-{PATIENT}{tag}')
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
@@ -290,12 +271,12 @@ if __name__ == "__main__":  # can get rid of
         f.write('Summary statistics for concatenated EDF files:\n\n')
 
     # For each night, export one merged file for each continuous time-interval for each night.
-    for i, night in enumerate(nights):
-        write_txt(f'Interval {i} Data:')  # Verbose for testing
-        for interval in night:
+    for night_num, night in enumerate(nights):
+        write_txt(f'Interval {night_num + 1} Data:')  # Verbose for testing
+        for interval_num, interval in enumerate(night):
             res: mne.io.Raw = concatenate([scalp_trim_and_decimate(to_edf(edf), 200) for edf in interval])
-            out_name: str = f'{name}-{i}{tag}'
+            out_name: str = f'{name}-night-{night_num + 1}_interval-{interval_num + 1}_scalp_eeg{tag}'
             export(res, out_name, 'bipolar')
-            write_txt(f'{out_name} Data:\n', str(res.info), f'Total concatenated: {len(night)}',
+            write_txt(f'{out_name} Data:\n', str(res.info), f'Total concatenated: {len(interval)}',
                       f'{res.get_data().shape[0]} x {res.get_data().shape[1]}', str(res.get_data()))
             assert f'{out_name}.edf' in os.listdir(), f'Export failed. {out_name}.edf not in {os.listdir()}.'
