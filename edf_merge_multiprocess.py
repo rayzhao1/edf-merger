@@ -9,7 +9,7 @@ import gc
 from multiprocessing import Pool, RawArray
 from typing import NamedTuple
 from dataclasses import dataclass
-from ctypes import c_wchar_p, Array, Structure
+from ctypes import c_int, c_wchar_p, Array, Structure
 from scipy.signal import detrend
 
 """
@@ -55,8 +55,8 @@ NIGHT_DURATION: datetime.timedelta = datetime.timedelta(hours=11)  # hours=11)
 class Interval(NamedTuple):
     start: int
     end: int
-    t0: str
-    tf: str
+    t0: datetime.datetime
+    tf: datetime.datetime
 
 
 @dataclass
@@ -72,12 +72,13 @@ class Night:
 def to_edf(edf_path: str):
     print(f'process {os.getpid()} made it to checkpoint E')
     source_path = os.getcwd()
-    if source_path == EDFS_PATH:
-        raw_edf = mne.io.read_raw_edf(edf_path)
-    else:
-        os.chdir(EDFS_PATH)
-        raw_edf = mne.io.read_raw_edf(edf_path)
-        os.chdir(source_path)
+    os.chdir(EDFS_PATH)
+    # if source_path == EDFS_PATH:
+    raw_edf = mne.io.read_raw_edf(edf_path)
+    # else:
+    # os.chdir(EDFS_PATH)
+    # raw_edf = mne.io.read_raw_edf(edf_path)
+    os.chdir(source_path)
     print(f'process {os.getpid()} made it to checkpoint F')
     return raw_edf
 
@@ -196,7 +197,7 @@ def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(secon
     source_path: str = os.getcwd()
     os.chdir(PATIENT_PATH)
     nights: list[Night] = []
-    curr_night: Night = None
+    curr_night: Night = Night([])
     curr_interval_start = 0
     curr_intervaL_t0 = None
 
@@ -211,7 +212,7 @@ def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(secon
             curr_name: str = row[0]
             curr_time_start: datetime.datetime = str_to_time(row[2])
             # Do not record files earlier than start, or file names that cannot be found in folder.
-            assert curr_name in all_files, 'csv references EDF file not in directory.'
+            # assert curr_name in all_files, 'csv references EDF file not in directory.'
 
             if curr_time_start < start - margin:
                 new_interval_flag = True
@@ -220,10 +221,10 @@ def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(secon
             if new_interval_flag:
                 new_interval_flag = False
                 curr_interval_start = curr_interval_end
-                curr_interval_t0 = time_to_str(curr_time_start)
+                curr_interval_t0 = curr_time_start
             # If we exceed the contiguous_interval length, add a new night
             if curr_time_start >= end:
-                curr_interval_tf = time_to_str(prev_time_end)
+                curr_interval_tf = prev_time_end
                 curr_night.add(Interval(start=curr_interval_start, end=curr_interval_end,
                                         t0=curr_interval_t0, tf=curr_interval_tf))
                 nights.append(curr_night)
@@ -236,7 +237,7 @@ def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(secon
 
             # If reach concat length or the time difference is large, add a new Interval for the current night.
             if curr_time_start - prev_time_end > margin or count >= FILE_CONCAT_LIMIT:
-                curr_interval_tf = time_to_str(prev_time_end)
+                curr_interval_tf = prev_time_end
                 curr_night.add(Interval(start=curr_interval_start, end=curr_interval_end,
                                         t0=curr_interval_t0, tf=curr_interval_tf))
                 curr_interval_start = curr_interval_end + 1
@@ -246,8 +247,8 @@ def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(secon
             prev_time_end = str_to_time(row[3])
             count += 1
     # Tail case
-    if str_to_time(curr_interval_t0) > str_to_time(curr_interval_tf):  # curr_interval.files:
-        curr_interval_tf = time_to_str(prev_time_end)
+    if curr_interval_t0 > curr_interval_tf:  # curr_interval.files:
+        curr_interval_tf = prev_time_end
         curr_night.add(Interval(start=curr_interval_start, end=curr_interval_end,
                                 t0=curr_interval_t0, tf=curr_interval_tf))
         nights.append(curr_night)
@@ -256,9 +257,9 @@ def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(secon
     return nights
 
 
-def process_night(enum: enumerate):
-    os.chdir(EDFS_PATH)
-    night_num, night = enum
+def process_night(num: enumerate):
+    # os.chdir(EDFS_PATH)
+    night_num, night = num, cnights[num]
 
     print('i am process id: ', os.getpid())
     print('my parent was process: ', os.getppid())
@@ -272,25 +273,28 @@ def process_night(enum: enumerate):
         print(f'process {os.getpid()} made it to checkpoint A')
         print(interval_num, len(interval))
 
-        t0_str: str = time_to_str(interval.t0)
-        tf_str: str = time_to_str(interval.tf)
-
-        out_name: str = f'{PATIENT}_night_{night_num + 1}.{interval_num + 1}_scalp_{t0_str}--{tf_str}'
+        out_name: str = f'{PATIENT}_night_{night_num + 1}.{interval_num + 1}_scalp_{interval.t0}--{interval.tf}'
         print(f'process {os.getpid()} made it to checkpoint B')
-        trimmed = [scalp_trim_and_decimate(to_edf(edf), 200) for edf in interval.files]
-        print(f'process {os.getpid()} finished trimming')
-        concatenated = mne.concatenate_raws(trimmed)
-        # 1) bandpass for neural data 2) bandstop for electrical noise 3) demean 4) scale
-        print(f'process {os.getpid()} made it to checkpoint C')
-        res = ((concatenated
-                .filter(l_freq=0.5, h_freq=80)
-                .notch_filter(60, notch_widths=4)
-                .apply_function(detrend, channel_wise=True, type="constant"))
-               .apply_function(lambda x: x * 1e-6, picks="eeg"))
-        print(f'process {os.getpid()} made it to checkpoint D')
 
+        # 1) bandpass for neural data 2) bandstop for electrical noise 3) demean 4) scale
+        res = (mne.concatenate_raws(
+            [scalp_trim_and_decimate(to_edf(edf), 200) for edf in cedf_lists[interval.start:interval.end]])
+               .filter(l_freq=0.5, h_freq=80)
+               .notch_filter(60, notch_widths=4)
+               .apply_function(detrend, channel_wise=True, type="constant")
+               .apply_function(lambda x: x * 1e-6, picks="eeg"))
+
+        print(f'process {os.getpid()} made it to checkpoint C')
         os.chdir(out_dir)
         export(res, out_name, 'bipolar', True)
+
+
+inherited_values = {}
+
+
+def init_worker(cnights, cedf_lists):
+    inherited_values['cnights'] = cnights
+    inherited_values['cedf_lists'] = cedf_lists
 
 
 if __name__ == "__main__":
@@ -301,7 +305,7 @@ if __name__ == "__main__":
     name, tag = '', 'mp-timed'
     SRC_PATH: str = os.getcwd()
     # Navigate to EDF files
-    while os.getcwd() is not os.sep:  # for _ in range(1):
+    for _ in range(1):  # while os.getcwd() is not os.sep: # for _ in range(1):
         os.chdir('..')
     HOME_PATH: str = os.getcwd()
     PATIENT_PATH: str = os.path.join(HOME_PATH, 'data_store0/presidio/nihon_kohden/PR06')
@@ -315,22 +319,50 @@ if __name__ == "__main__":
 
     # Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
     os.chdir(EDFS_PATH)
-    all_edfs: set[str] = set(os.listdir())
+    edfs_list = os.listdir()
+    edfs_list.sort()
+    all_edfs: set[str] = set(edfs_list)
     os.chdir(PATIENT_PATH)
     nights: list[Night] = parse_find(csv_catalog, all_edfs)
     out_dir = os.path.join(SRC_PATH, f'out-{PATIENT}-{tag}')
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.mkdir(out_dir)
-    os.chdir(out_dir)
+    os.chdir(EDFS_PATH)
 
-    # Array<Dict<str, str, Array<str>>
 
+    # os.chdir(out_dir)
+
+    class cInterval(Structure):
+        _fields_ = [('start', c_int),
+                    ('end', c_int),
+                    ('t0', c_wchar_p),
+                    ('tf', c_wchar_p)]
+
+
+    num_nights = len(nights)
+    cedf_lists = RawArray(c_wchar_p, edfs_list)
+
+    num_cintervals = max([len(night.intervals) for night in nights])
+    cnights = RawArray(cInterval * num_cintervals, num_nights)
+
+    for night_num, night in enumerate(nights):
+        cintervals = RawArray(cInterval, num_cintervals)
+
+        for interval_num, interval in enumerate(night.intervals):
+            cintervals[interval_num] = cInterval(start=interval.start,
+                                                 end=interval.end,
+                                                 t0=time_to_str(interval.t0),
+                                                 tf=time_to_str(interval.tf))
+        cnights[night_num] = cintervals
+
+    del edfs_list
     del all_edfs
+    del nights
     gc.collect()
 
-    with Pool(maxtasksperchild=1) as pool:
-        pool.map(process_night, enumerate(nights), chunksize=1)
+    with Pool(initializer=init_worker, initargs=(cnights, cedf_lists)) as pool:
+        pool.map(process_night, range(num_nights), chunksize=1)
 
     timer_end = time.time()
     print(f'Time elapsed: {timer_end - timer_start}')
