@@ -21,7 +21,7 @@ Dependencies:
     5) EDFLib, Python
 
 Usage:
-    python3 edf_merge.py <edf-file-path> <[optional] output-file-name> <[optional] start-time> <[optional] duration-time>
+    python3 edf_merge.py <edf-file-path> <[optional] output-file-name-tag>
 
 Requirements:
     1) The <edf-file-path> directory stores the EDF files to be merged in a folder with the same name.
@@ -41,12 +41,7 @@ Example - Valid File Structure:
 
     python3 edf_merge.py data_store0/presidio/nihon_kohden/PR05 False
 """
-# 9pm - 8am
-# 9pm - 3am, 3am - 8am
-# for each patient, run script over their entire EDF folder, split into concatenated EDF files by nights.
-# each night will be composed of several intervals.
 
-# data_store0/presidio/Nihon.../PR06/PR06_night_scalp_eeg/
 FILE_CONCAT_LIMIT: float = float('inf')
 NIGHT_START_HOUR: int = 21  # 9pm
 NIGHT_DURATION: datetime.timedelta = datetime.timedelta(hours=11)  # hours=11)
@@ -69,7 +64,7 @@ class Night:
 
 # shared state = Array<Dict<str, str, Array<str>>
 
-def to_edf(edf_path: str):
+def to_edf(edf_path: str) -> mne.io.Raw:
     print(f'process {os.getpid()} made it to checkpoint E')
     source_path = os.getcwd()
     os.chdir(EDFS_PATH)
@@ -122,12 +117,16 @@ def concatenate(lst: list[mne.io.Raw]) -> mne.io.Raw:
 
 
 def scalp_bipolar_reference(raw_edf: mne.io.Raw) -> mne.io.Raw:
-    cathodes = ['Fp1-Ref', 'F7-Ref', 'T7-Ref', 'P7-Ref', 'Fp1-Ref', 'F3-Ref', 'C3-Ref', 'P3-Ref', 'Fz-Ref', 'Cz-Ref',
-                'Fp2-Ref', 'F4-Ref', 'C4-Ref', 'P4-Ref', 'Fp2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'L_EOG-Ref',
-                'R_EOG-Ref', 'L_EMG-Ref']
-    anodes = ['F7-Ref', 'T7-Ref', 'P7-Ref', 'O1-Ref', 'F3-Ref', 'C3-Ref', 'P3-Ref', 'O1-Ref', 'Cz-Ref', 'Pz-Ref',
-              'F4-Ref', 'C4-Ref', 'P4-Ref', 'O2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'O2-Ref', 'A2-Ref', 'A1-Ref',
-              'R_EMG-Ref']
+    cathodes: list[str] = ['Fp1-Ref', 'F7-Ref', 'T7-Ref', 'P7-Ref', 'Fp1-Ref', 'F3-Ref', 'C3-Ref', 'P3-Ref', 'Fz-Ref',
+                           'Cz-Ref',
+                           'Fp2-Ref', 'F4-Ref', 'C4-Ref', 'P4-Ref', 'Fp2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref',
+                           'L_EOG-Ref',
+                           'R_EOG-Ref', 'L_EMG-Ref']
+    anodes: list[str] = ['F7-Ref', 'T7-Ref', 'P7-Ref', 'O1-Ref', 'F3-Ref', 'C3-Ref', 'P3-Ref', 'O1-Ref', 'Cz-Ref',
+                         'Pz-Ref',
+                         'F4-Ref', 'C4-Ref', 'P4-Ref', 'O2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'O2-Ref', 'A2-Ref',
+                         'A1-Ref',
+                         'R_EMG-Ref']
     names = ['Fp1_F7', 'F7_T7', 'T7_P7', 'P7_O1', 'Fp1_F3', 'F3_C3', 'C3_P3', 'P3_O1', 'Fz_Cz', 'Cz_Pz',
              'Fp2_F4', 'F4_C4', 'C4_P4', 'P4_O2', 'Fp2_F8', 'F8_T8', 'T8_P8', 'P8_O2', 'L-EOG_A2', 'R-EOG_A1',
              'L-EMG_R-EMG']
@@ -139,7 +138,7 @@ def average_reference(raw_edf: mne.io.Raw) -> mne.io.Raw:
     return raw_edf.set_eeg_reference()
 
 
-def export(raw_edf: mne.io.Raw, target_name: str, mode=None, overwrite_existing=True):
+def export(raw_edf: mne.io.Raw, target_name: str, mode=None, overwrite_existing=True) -> None:
     """Export raw object as EDF file"""
     name: str = f'{target_name}.edf'
     match mode:
@@ -303,6 +302,8 @@ if __name__ == "__main__":
     argc: int = len(sys.argv)
     limit: float = float('inf')
     name, tag = '', 'mp-timed'
+    if len(sys.argv) == 2:
+        tag = sys.argv[1]
     SRC_PATH: str = os.getcwd()
     # Navigate to EDF files
     for _ in range(1):  # while os.getcwd() is not os.sep: # for _ in range(1):
@@ -328,32 +329,34 @@ if __name__ == "__main__":
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.mkdir(out_dir)
+    os.chdir(out_dir)
+
+    with open(os.path.join(os.getcwd(), 'summary.txt'), 'w') as f:  # Opens file and casts as f
+        f.write(f'This folder has {len(nights)} nights of data:\n\n')
+        for night_num, night in enumerate(nights):
+            f.write(f'Night {night_num} had {len(night.intervals)} interval(s):\n')
+            for interval_num, interval in enumerate(night.intervals):
+                f.write(
+                    f'Interval {interval_num} started at {time_to_str(interval.t0)} and ended at {time_to_str(interval.tf)}\n')
+            f.write('\n')
+
     os.chdir(EDFS_PATH)
 
-
-    # os.chdir(out_dir)
-
-    class cInterval(Structure):
-        _fields_ = [('start', c_int),
-                    ('end', c_int),
-                    ('t0', c_wchar_p),
-                    ('tf', c_wchar_p)]
-
+    cIntervalType = c_int * 2
 
     num_nights = len(nights)
     cedf_lists = RawArray(c_wchar_p, edfs_list)
 
     num_cintervals = max([len(night.intervals) for night in nights])
-    cnights = RawArray(cInterval * num_cintervals, num_nights)
+    cnights = RawArray(cIntervalType * num_cintervals, num_nights)
 
     for night_num, night in enumerate(nights):
-        cintervals = RawArray(cInterval, num_cintervals)
+        cintervals = RawArray(cIntervalType, num_cintervals)
 
         for interval_num, interval in enumerate(night.intervals):
-            cintervals[interval_num] = cInterval(start=interval.start,
-                                                 end=interval.end,
-                                                 t0=time_to_str(interval.t0),
-                                                 tf=time_to_str(interval.tf))
+            cintervals[interval_num][0] = interval.start
+            cintervals[interval_num][1] = interval.end
+
         cnights[night_num] = cintervals
 
     del edfs_list
