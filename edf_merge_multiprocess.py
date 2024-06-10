@@ -9,6 +9,7 @@ import gc
 from multiprocessing import Pool, RawArray
 from typing import NamedTuple
 from dataclasses import dataclass
+import resource
 from ctypes import c_int, c_wchar_p
 from scipy.signal import detrend
 
@@ -65,16 +66,10 @@ class Night:
 # shared state = Array<Dict<str, str, Array<str>>
 
 def to_edf(edf_path: str) -> mne.io.Raw:
-    print(f'process {os.getpid()} made it to checkpoint E')
     source_path = os.getcwd()
     os.chdir(EDFS_PATH)
-    # if source_path == EDFS_PATH:
     raw_edf = mne.io.read_raw_edf(edf_path)
-    # else:
-    # os.chdir(EDFS_PATH)
-    # raw_edf = mne.io.read_raw_edf(edf_path)
     os.chdir(source_path)
-    print(f'process {os.getpid()} made it to checkpoint F')
     return raw_edf
 
 
@@ -83,7 +78,6 @@ def scalp_trim_and_decimate(raw_edf: mne.io.Raw, freq: int) -> mne.io.Raw:
         - Only scalp channels included.
         - Resamples input EDF's frequency to 'freq'.
     """
-    print(f'process {os.getpid()} made it to checkpoint G')
     rename_dict: dict[str: str] = {name: name[4:] for name in raw_edf.ch_names}
     if "POL EMG1-Ref" in rename_dict:
         rename_dict["POL EMG1-Ref"] = 'L_EMG-Ref'
@@ -99,20 +93,16 @@ def scalp_trim_and_decimate(raw_edf: mne.io.Raw, freq: int) -> mne.io.Raw:
     # Remove non scalp-eeg
     channels: list[str] = raw_edf.ch_names
     scalp_start: int = channels.index('Fp1-Ref')
-    # print('initial', raw_edf.ch_names)
     to_drop = channels[:scalp_start] + ['EKG1-Ref', 'EKG2-Ref']
     raw_scalp = raw_edf.drop_channels(to_drop)
-    # print('final', raw_scalp.ch_names)
 
     # Decimate 2000 hz to 200 hz
     raw_scalp = raw_scalp.resample(freq)  # internally uses scipy.signal.decimate
-    print(f'process {os.getpid()} made it to checkpoint H')
     return raw_scalp
 
 
 def concatenate(lst: list[mne.io.Raw]) -> mne.io.Raw:
     """Concatenates a list of mne.io.Raw objects and returns result."""
-    print('checkpoint I')
     return mne.concatenate_raws(lst)
 
 
@@ -155,7 +145,6 @@ def export(raw_edf: mne.io.Raw, target_name: str, mode=None, overwrite_existing=
 
 def print_edf(raw_edf: mne.io.Raw, name: str) -> None:
     """Print basic information about an mne.io.Raw object."""
-    # data, time = raw_edf[:, :]
     print(f'\n\n\n\nTesting {name} EDF:\n')
     print(raw_edf.info)
     print('Dim:', raw_edf.get_data().shape[0], 'channels', 'x', raw_edf.get_data().shape[1], 'time points\n\n\n')
@@ -199,7 +188,6 @@ def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(secon
     curr_night: Night = Night([])
     curr_interval_start = 0
     curr_intervaL_t0 = None
-
     count: int = 0
 
     with open(csv_in) as csv_file:
@@ -212,7 +200,6 @@ def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(secon
             curr_time_start: datetime.datetime = str_to_time(row[2])
             # Do not record files earlier than start, or file names that cannot be found in folder.
             assert curr_name in all_files, 'csv references EDF file not in directory.'
-
             if curr_time_start < start - margin:
                 new_interval_flag = True
                 prev_time_end = str_to_time(row[3])
@@ -257,17 +244,9 @@ def parse_find(csv_in: str, all_files: set[str], margin=datetime.timedelta(secon
 
 
 def process_night(night_num):
-    # os.chdir(EDFS_PATH)
-
-    print('i am process id: ', os.getpid())
-    print('my parent was process: ', os.getppid())
-    print('i am working on night #: ', night_num)
-
     for interval_num in range(inherited_values['num_cintervals']):
         start = inherited_values['cnights'][night_num * inherited_values['cnight_width'] + interval_num * 2]
         end = inherited_values['cnights'][night_num * inherited_values['cnight_width'] + interval_num * 2 + 1]
-
-        print(f'process {os.getpid()} made it to checkpoint A')
 
         out_name: str = f'{PATIENT}_night_{night_num+1}.{interval_num+1}_scalp'
         # 1) bandpass for neural data 2) bandstop for electrical noise 3) demean 4) scale
@@ -278,15 +257,14 @@ def process_night(night_num):
                .apply_function(detrend, channel_wise=True, type="constant")
                .apply_function(lambda x: x * 1e-6, picks="eeg"))
 
-        print(f'process {os.getpid()} made it to checkpoint B')
-        os.chdir(out_dir)
+        os.chdir(OUT_PATH)
         export(res, out_name, 'bipolar', True)
 
 
 inherited_values = {}
 
 
-def init_worker(cnight_width, num_cintervals, cnights, cedfs_list):
+def init_worker(cnight_width, num_cintervals, cnights, cedfs_list) -> None:
     inherited_values['cnight_width'] = cnight_width
     inherited_values['num_cintervals'] = num_cintervals
     inherited_values['cnights'] = cnights
@@ -303,7 +281,7 @@ if __name__ == "__main__":
         tag = sys.argv[1]
     SRC_PATH: str = os.getcwd()
     # Navigate to EDF files
-    while os.getcwd() is not os.sep: #for _ in range(1):  # while os.getcwd() is not os.sep: # for _ in range(1):
+    while os.getcwd() is not os.sep:
         os.chdir('..')
     HOME_PATH: str = os.getcwd()
     PATIENT_PATH: str = os.path.join(HOME_PATH, 'data_store0/presidio/nihon_kohden/PR06')
@@ -313,22 +291,26 @@ if __name__ == "__main__":
     PATIENT: str = os.path.basename(os.getcwd())
     EDFS_PATH: str = os.path.join(HOME_PATH, PATIENT_PATH, PATIENT)
     csv_catalog: str = f'{PATIENT}_edf_catalog.csv'
-    # assert csv_catalog in os.listdir(), f'Please provide a .csv file formatted as: {PATIENT}_EDFMeta.csv'
 
-    # Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
+    # Process EDF directory and ensure the files in it are sequential.
     os.chdir(EDFS_PATH)
-    edfs_list = os.listdir()
-    edfs_list.sort()
+    try:
+        edfs_list = [edf for edf in os.listdir() if edf[edf.index('_')+1:edf.index('.')].isnumeric()]
+        edfs_list.sort()
+    except Exception:
+        raise Exception("Error processing input list.")
     all_edfs: set[str] = set(edfs_list)
+
     os.chdir(PATIENT_PATH)
     nights: list[Night] = parse_find(csv_catalog, all_edfs)
-    out_dir = os.path.join(SRC_PATH, f'out-{PATIENT}-{tag}')
-    if os.path.exists(out_dir):
-        shutil.rmtree(out_dir)
-    os.mkdir(out_dir)
-    os.chdir(out_dir)
+    OUT_PATH = os.path.join(SRC_PATH, f'out-{PATIENT}-{tag}')
+    if os.path.exists(OUT_PATH):
+        shutil.rmtree(OUT_PATH)
+    os.mkdir(OUT_PATH)
+    os.chdir(OUT_PATH)
 
     with open(os.path.join(os.getcwd(), 'summary.txt'), 'w') as f:  # Opens file and casts as f
+        f.write(f'This folder has edf files: {edfs_list}\n')
         f.write(f'This folder has {len(nights)} nights of data:\n\n')
         for night_num, night in enumerate(nights):
             f.write(f'Night {night_num} had {len(night.intervals)} interval(s):\n')
@@ -359,6 +341,9 @@ if __name__ == "__main__":
     with Pool(initializer=init_worker, maxtasksperchild=1, initargs=(cnight_width, num_cintervals, cnights, cedfs_list)) as pool:
         pool.map(process_night, range(num_nights))
 
-    timer_end = time.time()
-    print(f'Time elapsed: {timer_end - timer_start}')
-_mult
+    os.chdir(OUT_PATH)
+    write_txt(f'Time elapsed: {(time.time() - timer_start)/60} minutes')
+    write_txt('Resources consumed by the calling process; sum of resources used by all threads in the process =')
+    write_txt(f'{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1e-6}')
+    write_txt('Resources consumed by child processes of the calling process which have been terminated and waited for =')
+    write_txt(f'{resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1e-6}')
