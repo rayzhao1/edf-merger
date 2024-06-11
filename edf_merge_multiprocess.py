@@ -19,14 +19,12 @@ Dependencies:
     2) Python 3.10+
     3) EDFlib-Python-1.0.8+
     4) edfio 0.4.0
-    5) EDFLib, Python
 
 Usage:
     python3 edf_merge.py <edf-file-path> <[optional] output-file-name-tag>
 
 Requirements:
     1) The <edf-file-path> directory stores the EDF files to be merged in a folder with the same name.
-    2) If "Merge-checking" is on, the <edf-file-path> directory contains a '<name>_EDFMeta.csv'.
 
 Example - Valid File Structure:
     .
@@ -40,7 +38,7 @@ Example - Valid File Structure:
                         ├── PR05_2606.edf
                         └── PR05_2607.edf
 
-    python3 edf_merge.py data_store0/presidio/nihon_kohden/PR05 False
+    python3 edf_merge.py data_store0/presidio/nihon_kohden/PR05
 """
 
 FILE_CONCAT_LIMIT: float = float('inf')
@@ -249,14 +247,18 @@ def process_night(night_num):
         end = inherited_values['cnights'][night_num * inherited_values['cnight_width'] + interval_num * 2 + 1]
 
         out_name: str = f'{PATIENT}_night_{night_num+1}.{interval_num+1}_scalp'
+        # Reduction instead of concat list at once s.t. to save mem -> max of 2 EDF's resident in memory at once.
         # 1) bandpass for neural data 2) bandstop for electrical noise 3) demean 4) scale
-        res = (mne.concatenate_raws(
-            [scalp_trim_and_decimate(to_edf(inherited_values['cedfs_list'][i]), 200) for i in range(start, end)])
-               .filter(l_freq=0.5, h_freq=80)
+        res = scalp_trim_and_decimate(to_edf(inherited_values['cedfs_list'][start]), 200)
+
+        for file in inherited_values['cedfs_list'][start+1:end]:
+            res = mne.concatenate_raws([res, scalp_trim_and_decimate(to_edf(file), 200)])
+            gc.collect()
+
+        res = (res.filter(l_freq=0.5, h_freq=80)
                .notch_filter(60, notch_widths=4)
                .apply_function(detrend, channel_wise=True, type="constant")
                .apply_function(lambda x: x * 1e-6, picks="eeg"))
-
         os.chdir(OUT_PATH)
         export(res, out_name, 'bipolar', True)
 
@@ -276,15 +278,24 @@ if __name__ == "__main__":
     # Process command-line args
     argc: int = len(sys.argv)
     limit: float = float('inf')
-    name, tag = '', 'mp-timed'
-    if len(sys.argv) == 2:
-        tag = sys.argv[1]
+    PATIENT_PATH, tag = '', ''
+
+    match argc:
+        case 2:
+            PATIENT_PATH = sys.argv[1]
+        case 3:
+            PATIENT_PATH = sys.argv[1]
+            tag = sys.argv[2]
+        case _:
+            PATIENT_PATH, tag = '', ''
+            raise ValueError("Please format arguments correctly")
+
     SRC_PATH: str = os.getcwd()
     # Navigate to EDF files
     while os.getcwd() is not os.sep:
         os.chdir('..')
     HOME_PATH: str = os.getcwd()
-    PATIENT_PATH: str = os.path.join(HOME_PATH, 'data_store0/presidio/nihon_kohden/PR06')
+    PATIENT_PATH: str = os.path.join(HOME_PATH, PATIENT_PATH)
     os.chdir(PATIENT_PATH)
 
     # Identify file paths
@@ -344,6 +355,6 @@ if __name__ == "__main__":
     os.chdir(OUT_PATH)
     write_txt(f'Time elapsed: {(time.time() - timer_start)/60} minutes')
     write_txt('Resources consumed by the calling process; sum of resources used by all threads in the process =')
-    write_txt(f'{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1e-6}')
+    write_txt(f'{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1e6}')
     write_txt('Resources consumed by child processes of the calling process which have been terminated and waited for =')
-    write_txt(f'{resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1e-6}')
+    write_txt(f'{resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1e6}')
