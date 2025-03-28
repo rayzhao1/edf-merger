@@ -311,10 +311,11 @@ def resolve_args(args):
     rmdir(output_dir) if output_dir.exists() else None
     output_dir.mkdir(exist_ok=False)
 
-    assert patient_dir.exists(), f'Specified EDF directory does not exist: {patient_dir}.'
-    assert edfs_dir.exists(), f'Specified EDF directory does not have a {patient_name} folder.'
-    assert output_dir.exists(), f'Specified EDF directory does not have a {patient_name} folder.'
-    assert catalog_path.exists(), f'Specified EDF metadata catalog does not exist at {catalog_path}.'
+    if strict:
+        assert patient_dir.exists(), f'Specified EDF directory does not exist: {patient_dir}.'
+        assert edfs_dir.exists(), f'Specified EDF directory does not have a {patient_name} folder.'
+        assert output_dir.exists(), f'Specified EDF directory does not have a {patient_name} folder.'
+        assert catalog_path.exists(), f'Specified EDF metadata catalog does not exist at {catalog_path}.'
     
     return patient_name, dict(
         script=script_dir,
@@ -339,9 +340,12 @@ if __name__ == "__main__":
                         help='absolute path to directory to store merged output in, or a string name')
     parser.add_argument("-l", "--local", action="store_true",
                         help='flag to indicate that script is run locally; default is run on server')
-    args = parser.parse_args()
+    try: # (1) If local use, actually parse arguments
+        args = parser.parse_args()
+    except SystemExit: # (2) If server use, script must be run as job so hardcode arguments
+        args = parser.parse_args(['PR03', 'PR03_EDFMeta', 'out-PR03-3.28'])
 
-    patient_name, path = resolve_args(args)
+    patient_name, path = resolve_args(args, strict=not args.local)
 
     # Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
     all_edfs = set([p.name for p in path['edfs'].iterdir()])
