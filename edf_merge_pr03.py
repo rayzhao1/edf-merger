@@ -290,7 +290,7 @@ def get_patient_csv_key(patient_id: str):
     return key
 
 
-def resolve_args(args):
+def resolve_args(args, strict=True):
     def is_path(s): # not robust
         return '/' in s or '\\' in s
     def rmdir(dir):
@@ -300,7 +300,7 @@ def resolve_args(args):
     
     if not is_path(args.edfs_dir):
         patient_name = args.edfs_dir
-        patient_dir = Path('data_store0', 'presidio', 'nihon_kohden', patient_name)
+        patient_dir = Path(f'/data_store0/presidio/nihon_kohden/{patient_name}')
     else:
         patient_dir = Path(args.edfs_dir)
         patient_name = patient_dir.name
