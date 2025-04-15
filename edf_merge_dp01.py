@@ -74,10 +74,6 @@ class Interval:
     ):
         curr_edf_path = interval_files.pop(0)
         curr_edf = read_raw_edf_corrected(curr_edf_path, channels)
-<<<<<<< HEAD
-=======
-        print(curr_edf.ch_names)
->>>>>>> ff2e223d0682646ee22cab587af11d3d47bdc391
         processed_edfs = []
         for next_edf_path in interval_files:
             print(f"Processing {curr_edf_path} and {next_edf_path}")
@@ -115,9 +111,8 @@ class Interval:
         res = postprocessing_func(mne.concatenate_raws(edfs), **postprocessing_args)
 
         assert abs(res.info['meas_date'] - self.t0) < timedelta(seconds=1), f"\nres.info['meas_date']={res.info['meas_date']}\nself.t0={self.t0}"
-        # assert abs(res.duration - expected_seconds) < 5, f"\nres.duration={res.duration}\nexpected_seconds={expected_seconds}"
+        assert abs(res.duration - expected_seconds) < 5, f"\nres.duration={res.duration}\nexpected_seconds={expected_seconds}"
         assert res.n_times == int(res.duration * S_FREQ)
-        #assert self.t0 + timedelta(seconds=res.duration) == self.tf
 
         return res
 
