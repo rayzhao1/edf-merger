@@ -86,6 +86,7 @@ class Interval:
                 curr_edf = edf_crop(curr_edf, curr_end-next_start)
             processed_edfs.append(curr_edf)
             curr_edf = next_edf
+        processed_edfs.append(next_edf) # tail case
         return processed_edfs
     
     def edf_concatenate(
