@@ -1,6 +1,6 @@
 """
 Usage (all absolute paths):
-    python edf_merge_pr03.py <edf-files-dir-path> <edf-catalog-path> <output-dir-path>
+    python edf_merge_dp01.py ~/ray/ucsf/data_store2/OCD_SEEG/nihon_kohden/DP01 ~/ray/ucsf/data_store2/OCD_SEEG/nihon_kohden/DP01/nkhdf5/DP01_edf_catalog.csv test-DP01 --local
 
 Example - Default File Structure:
     .
@@ -13,10 +13,8 @@ Example - Default File Structure:
                         ├── PR03_2605.edf
                         ├── PR03_2606.edf
                         └── PR03_2607.edf
-                        
-    * able to avoid absolute paths only because expected file structure is used            
-        python edf_merge_pr03.py ~/ray/data_store0/presidio/nihon_kohden/PR03 ~/ray/data_store0/presidio/nihon_kohden/PR03/PR03_EDFMeta.csv out-PR03 --local
 """
+
 from pathlib import Path
 import argparse
 from itertools import pairwise
@@ -40,12 +38,12 @@ from typing import Callable, Any
 NIGHT_START_HOUR: int = 21  # 9pm
 NIGHT_DURATION: timedelta = timedelta(hours=11)  # hours=11)
 S_FREQ = 200
-SCALP_CH = ['Pz-Ref', 'A1-Ref', 'O1-Ref', 'F3-Ref', 'R_EOG-Ref', 
-            'T8-Ref', 'F8-Ref', 'A2-Ref', 'F4-Ref', 'R_EMG-Ref', 
-            'P7-Ref', 'P3-Ref', 'T7-Ref', 'L_EMG-Ref', 'F7-Ref',
+scalp_channels = ['Pz-Ref', 'A1-Ref', 'O1-Ref', 'F3-Ref', 'REOG-Ref', 
+            'T8-Ref', 'F8-Ref', 'A2-Ref', 'F4-Ref', 'REMG1-Ref', 
+            'P7-Ref', 'P3-Ref', 'T7-Ref', 'LEMG1-Ref', 'F7-Ref',
             'Fp1-Ref', 'P8-Ref', 'Fz-Ref', 'O2-Ref', 'C4-Ref', 
-            'P4-Ref', 'Fp2-Ref', 'L_EOG-Ref', 'C3-Ref', 'Cz-Ref'
-            ]
+            'P4-Ref', 'Fp2-Ref', 'LEOG-Ref', 'C3-Ref', 'Cz-Ref']
+SCALP_CH = tuple([f'POL {name}' for name in scalp_channels]) # their name in EDF
 
 class Night:
     night_count = 0
@@ -70,52 +68,63 @@ class Interval:
     def add(self, file):
         self.files.append(file)
     
-    def concatenate(
+    def edf_pad_and_crop(
+            self, 
+            interval_files, 
+            channels,
+    ):
+        curr_edf_path = interval_files.pop(0)
+        curr_edf = read_raw_edf_corrected(curr_edf_path, channels)
+        print(curr_edf.ch_names)
+        processed_edfs = []
+        for next_edf_path in interval_files:
+            print(f"Processing {curr_edf_path} and {next_edf_path}")
+            next_edf = read_raw_edf_corrected(next_edf_path, channels)
+            curr_end, next_start = curr_edf.info['meas_date']+timedelta(seconds=curr_edf.duration), next_edf.info['meas_date']
+
+            if curr_end < next_start:
+                curr_edf = edf_pad(curr_edf, next_start-curr_end)
+            elif curr_end > next_start:
+                curr_edf = edf_crop(curr_edf, curr_end-next_start)
+            processed_edfs.append(curr_edf)
+            curr_edf = next_edf
+        return processed_edfs
+    
+    def edf_concatenate(
             self,  
-            preproc: Callable, 
-            preproc_args: tuple[Any], 
-            postproc: Callable, 
-            postproc_args: tuple[Any], 
-            ch: list[str]=SCALP_CH,
+            path: dict[str, str],
+            preprocessing_func: Callable,
+            preprocessing_args: list[Any],
+            postprocessing_func: Callable,
+            postprocessing_args: list[Any],
+            include: list[str]=SCALP_CH,
+            expected_seconds: int=NIGHT_DURATION.seconds,
             local: bool=False
     ):
         """Concatenates self.files as a continuous EDF file. Each individual file is processed according to `preproc`,
            and the resulting concatenated file is processed according to `postproc`.
         """
         interval_files = list(self.files) if not local else [path['edfs'].joinpath(Path(f).name) for f in self.files]
-        curr_edf = read_adjusted_edf(interval_files.pop(0))
-        assert curr_edf.info['meas_date'] == self.t0
+        first = read_raw_edf(interval_files[0])
+        assert abs(first.info['meas_date'] - self.t0) < timedelta(seconds=1), f"\nfirst.info['meas_date']=={first.info['meas_date']}\nself.t0={self.t0}"
 
-        processed_edfs = []
+        edfs = self.edf_pad_and_crop(interval_files, include)
+        edfs = [preprocessing_func(edf, **preprocessing_args) for edf in edfs]
+        res = postprocessing_func(mne.concatenate_raws(edfs), **postprocessing_args)
 
-        for edf_path, next_edf in pairwise(interval_files):
-            next_edf = read_adjusted_edf(edf_path, include=ch)
-            processed_edfs.append(preproc(curr_edf, next_edf, **preproc_args))
-            curr_edf = next_edf
-            
-        concatenated = mne.concatenate_raws(processed_edfs)
-        
-        return postproc(concatenated, **postproc_args)
+        assert abs(res.info['meas_date'] - self.t0) < timedelta(seconds=1), f"\nres.info['meas_date']={res.info['meas_date']}\nself.t0={self.t0}"
+        # assert abs(res.duration - expected_seconds) < 5, f"\nres.duration={res.duration}\nexpected_seconds={expected_seconds}"
+        assert res.n_times == int(res.duration * S_FREQ)
+        #assert self.t0 + timedelta(seconds=res.duration) == self.tf
+
+        return res
 
 
-def preproc_single_edf(curr_edf, next_edf, s_freq, exp_duration):
-    curr_start, next_start = curr_edf.info['meas_date'], next_edf.info['meas_date']
-    curr_dur = timedelta(seconds=curr_edf.duration)
-
-    if curr_dur < exp_duration:
-        curr_edf = edf_pad_to_duration(curr_edf, exp_duration)
-    elif curr_dur > exp_duration:
-        curr_edf = edf_crop_to_duration(curr_edf, exp_duration)
-    
-    assert curr_edf.duration == exp_duration       # Right duration
-    assert curr_edf.n_times / s_freq == exp_duration.seconds    # Right # sample
-    assert curr_start + curr_dur == next_start                  # Next has right start time
-
+def preprocess_single_edf(curr_edf, s_freq=S_FREQ):
     return rename_ch(curr_edf).resample(s_freq)
 
 
-def postproc_night_edf(edf, night_duration):
-    assert edf.duration == 60 * 60 * night_duration
+def postprocess_night_edf(edf):
     # 1) bandpass for neural data 2) bandstop for electrical noise 3) demean 4) scale 
     return (edf
                 .filter(l_freq=0.5, h_freq=80, verbose=False)
@@ -124,53 +133,54 @@ def postproc_night_edf(edf, night_duration):
                 .rescale(1e-6)
         )
 
-def edf_pad_to_duration(raw_edf, duration, s_freq=S_FREQ):
-    assert raw_edf.duration < duration
-    curr_data, curr_dur = raw_edf.get_data(return_times=True)[-1]  # Last time point in seconds
 
-    pad_sec = duration.seconds - curr_dur
-    s_freq = raw_edf.info['sfreq']
-    pad_samples = int(pad_sec * s_freq)
+def edf_pad(raw_edf, amount):
+    curr_data = raw_edf.get_data()  # Last time point in seconds
+    sfreq = raw_edf.info['sfreq']
+    old = raw_edf.duration
+    pad_samples = int(amount.seconds * sfreq)
 
     pad_data = np.zeros((len(raw_edf.ch_names), pad_samples))
-    new_data = np.concatenate((curr_data, pad_data), axis=1)
+    new_data = np.hstack((curr_data, pad_data))
 
     # Create new info object
     new_info = raw_edf.info.copy()
-    new_info['n_times'] = pad_samples
-
-    new_edf = mne.io.RawArray(new_data, new_info)
-    new_edf.times = np.arange(pad_samples) / s_freq
-    new_edf.n_times = raw_edf._data.shape[1]
-
-    return new_edf
-
-def edf_crop_to_duration(raw_edf, duration):
-    assert raw_edf.duration > duration
-    return raw_edf.copy().crop(tmin=0, tmax=duration.seconds, include_tmax=False)
+    res = mne.io.RawArray(new_data, new_info)
+    print(f"Attempted to pad {amount}: From {old} to {res.duration}.")
+    return res
 
 
-def read_adjusted_edf(fn, include=SCALP_CH):
+def edf_crop(raw_edf, amount):
+    amount_sec = amount.microseconds * 1e-6 # Raw.crop wants seconds, and .seconds kills subsecond resolution
+    old = raw_edf.duration
+    res = raw_edf.copy().crop(tmin=0, tmax=raw_edf.duration-amount_sec, include_tmax=False)
+    print(f"Attempted to crop {amount_sec} seconds: From {old} to {res.duration}.")
+    return res
+
+
+def read_raw_edf_corrected(fn, include=SCALP_CH) -> mne.io.Raw:
     """For whatever reason, mne.io.read_raw_edf zeros an input file's subseconds. Pyedflib does not
        better, so the edfio library is needed.
     """
     edf_edfio = read_edf(fn)
-    start = datetime.combine(edf_edfio.starttime, edf_edfio.endtime).replace(tzinfo=timezone.utc)
+    start = datetime.combine(edf_edfio.startdate, edf_edfio.starttime).replace(tzinfo=timezone.utc)
     edf_mne = read_raw_edf(fn, include=include)
+    old = edf_mne.info['meas_date']
     edf_mne.set_meas_date(start)
+    print(f"Adjusted EDF {fn} start from {old} to {edf_mne.info['meas_date']}")
     return edf_mne
 
 
 def rename_ch(raw_edf: mne.io.Raw) -> mne.io.Raw:
     rename_dict: dict[str: str] = {name: name[4:] for name in raw_edf.ch_names}
-    if "POL L EMG-Ref" in rename_dict:
-        rename_dict["POL L EMG-Ref"] = 'L_EMG-Ref'
-    if "POL R EMG-Ref" in rename_dict:
-        rename_dict["POL R EMG-Ref"] = 'R_EMG-Ref'
-    if 'POL L EOG-Ref' in rename_dict:
-        rename_dict['POL L EOG-Ref'] = 'L_EOG-Ref'
-    if 'POL R EOG-Ref' in rename_dict:
-        rename_dict['POL R EOG-Ref'] = 'R_EOG-Ref'
+    if "POL LEMG1-Ref" in rename_dict:
+        rename_dict["POL LEMG1-Ref"] = 'L_EMG-Ref' # there's also POL LEMG2-Ref'?
+    if "POL REMG1-Ref" in rename_dict:
+        rename_dict["POL REMG1-Ref"] = 'R_EMG-Ref'
+    if 'POL LEOG-Ref' in rename_dict:
+        rename_dict['POL LEOG-Ref'] = 'L_EOG-Ref'
+    if 'POL REOG-Ref' in rename_dict:
+        rename_dict['POL REOG-Ref'] = 'R_EOG-Ref'
 
     raw_edf = raw_edf.rename_channels(rename_dict)
     return raw_edf
@@ -188,7 +198,7 @@ def scalp_bipolar_reference(raw_edf: mne.io.Raw) -> mne.io.Raw:
 
 
 def export_edf(raw_edf: mne.io.Raw, target_name: str, mode=None, overwrite_existing=True):
-    """Export raw object as EDF file"""
+    """Export raw object as EDF file. Result is zero-padded if non-integer duration (MNE behavior)"""
     name: str = f'{target_name}.edf'
     match mode:
         case 'bipolar':
@@ -205,9 +215,9 @@ def export_edf(raw_edf: mne.io.Raw, target_name: str, mode=None, overwrite_exist
 
 def str_to_time(time_str: str, time_format='%Y-%m-%d %H:%M:%S') -> datetime:
     if '.' in time_str:
-        return datetime.strptime(time_str.split('.')[0], time_format)
+        return datetime.strptime(time_str.split('.')[0], time_format).replace(tzinfo=timezone.utc)
     elif '+' in time_str: # DP01
-        return datetime.strptime(time_str.split('+')[0], time_format)
+        return datetime.strptime(time_str.split('+')[0], time_format).replace(tzinfo=timezone.utc)
     else:
         raise Exception(f'Invalid time_str {time_str}')
 
@@ -228,18 +238,19 @@ def round_day(dt):
 def csv_parse_nights(
     csv_in: str, 
     key: dict[str, str], 
-    night_start_hour: int,
-    night_duration: timedelta,
-    all_files=None, 
+    all_files,
+    night_start_hour: int=NIGHT_START_HOUR,
+    night_duration: timedelta=NIGHT_DURATION, 
     idx=None, 
     margin=timedelta(seconds=0),
-    strict=True,
+    local=True,
 ) -> list[Night]:
     """Iterate through 'csv_in' and return a list of Nights, where each Night contains a list of contiguous interval of EDF file
        names such that each EDF is less than 'margin' away from the next file in time. This implementation relies on the
        fact that csv_in is sorted in time-chronological order. All returned EDF files are also constrained to be in the
        time range between 'start' and 'start + duration'.
     """
+    strict = not local
     start_idx, end_idx = key['start'], key['end']
     edf_name_idx, edf_path_idx = key['edf_name'], key['edf_path']
     ch_name_idx = key.get('ch_names')
@@ -249,7 +260,7 @@ def csv_parse_nights(
     end: datetime = start + night_duration  # Set initial end time
 
     nights: list[Night] = []
-    curr_night, curr_interval = Night(idx=0), Interval()
+    curr_night, curr_interval = Night(), Interval()
 
     with open(csv_in) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
@@ -268,7 +279,7 @@ def csv_parse_nights(
                 curr_night.add(curr_interval)
                 nights.append(curr_night)
                 curr_interval = Interval()
-                curr_night = Night(idx=len(nights))
+                curr_night = Night()
                 # Update [start, end] time interval for next night
                 start = round_day(curr_time_start).replace(hour=night_start_hour, minute=0, second=0, microsecond=0)  # Set start date and time
                 end = start + night_duration
@@ -276,13 +287,13 @@ def csv_parse_nights(
             # (3) We've reached a new interval, only set 't0' for the first file in an interval!
             if not curr_interval.files:
                 curr_interval.t0 = curr_time_start
-            # (4) Sanity check - does EDF meta file actually exist in directory
-            if all_files and curr_name not in all_files:
-                if not strict:
+            # (4) Sanity check - does EDF listed in catalog actually exist in directory
+            if curr_name not in all_files:
+                if strict:
+                    raise Exception(f'File {curr_name} not found in directory.')
+                else:
                     print(f'Warning - {curr_name} not found in EDF directory.')
                     continue
-                else:
-                    raise Exception(f'File {curr_name} not found in directory.')
             # (5) Sanity check - Very rare (PR03), some files do not not have scalp data
             if ch_name_idx and 'POL Fp1-Ref' not in eval(row[ch_name_idx]):
                 continue
@@ -296,9 +307,9 @@ def csv_parse_nights(
             # (7) Finally, we're safe to add the data at 'idx' to current interval, or the file path by default
             if idx:
                 vals = tuple([curr_path] + [row[i] for i in idx])
-                curr_interval.add(vals)
             else:
-                curr_interval.add(row[edf_path_idx])
+                vals = row[edf_path_idx]
+            curr_interval.add(vals)
             prev_time_end = curr_time_end
         # Tail case
         if curr_interval.files:
@@ -306,7 +317,7 @@ def csv_parse_nights(
             curr_night.add(curr_interval)
             nights.append(curr_night)
 
-    if not args.local: # Only perform verification if on server
+    if not local: # Only perform verification if on server
         verify_night_ranges(patient_name, nights)
 
     return nights
@@ -314,21 +325,14 @@ def csv_parse_nights(
 
 def verify_night_ranges(patient, nights):
     """Hard-coded verification. Ranges are (inclusive, exclusive]"""
-    def get_num_str(num):
-        if num < 100:
-            return f'{patient}_00{num}.edf'
-        if num < 1000:
-            return f'{patient}_0{num}.edf'
-        else:
-            return f'{patient}_{num}.edf'
     
     def verify_night(night_num, expected_range, expected_len=None):
         correct_len = len(nights[night_num].intervals[0].files) == expected_len if expected_len else True
-        correct_files = [Path(fn).name for fn in nights[night_num].intervals[0].files] == [get_num_str(i) for i in expected_range]
+        correct_files = [Path(fn).name for fn in nights[night_num].intervals[0].files] == [f'{patient}_{i:04}:.edf' for i in expected_range]
         if not correct_len:
             raise Exception(f'Expected {expected_len}, got length {len(nights[night_num].intervals[0].files)}')
         if not correct_files:
-            raise Exception(f'Expected {[get_num_str(i) for i in expected_range]}, got files {[Path(fn).name for fn in nights[night_num].intervals[0].files]}')
+            raise Exception(f'Expected {[f'{patient}_{i:04}:.edf' for i in expected_range]}, got files {[Path(fn).name for fn in nights[night_num].intervals[0].files]}')
 
     def verify_dp01():
         """Total 9 nights."""
@@ -494,10 +498,8 @@ if __name__ == "__main__":
     nights: list[Night] = csv_parse_nights(
         csv_in=path['meta'], 
         key=get_patient_csv_key(patient_name), 
-        night_start_hour=NIGHT_START_HOUR,
-        night_duration=NIGHT_DURATION,
-        all_files=set([p.name for p in path['edfs'].iterdir()]) if not args.local else None, 
-        strict=not args.local,
+        all_files=set([p.name for p in path['edfs'].iterdir()]), 
+        local=args.local,
     )
     # (3) For each night, export one merged file for each continuous time-interval for each night.
     for night in nights:
@@ -507,16 +509,12 @@ if __name__ == "__main__":
                 continue
             t0_str, tf_str = interval.t0.strftime("%Y-%m-%d_%H.%M"), interval.tf.strftime("%Y-%m-%d_%H.%M")
             out_path = path['output'].joinpath(f'{patient_name}_night_{night.idx+1}.{interval.idx+1}_scalp_{t0_str}--{tf_str}')
-            res = interval.concatenate(
-                preproc=preproc_single_edf,
-                preproc_args=({
-                    s_freq: S_FREQ, 
-                    exp_duration: timedelta(seconds=300)
-                }),
-                postproc=postproc_night_edf,
-                postproc_args=({
-                    night_duration: NIGHT_DURATION,
-                }),
+            res = interval.edf_concatenate(
+                path=path,
+                preprocessing_func=preprocess_single_edf,
+                preprocessing_args=(dict()),
+                postprocessing_func=postprocess_night_edf,
+                postprocessing_args=(dict()),
                 local=args.local,
             )
             export_edf(res, out_path, mode='bipolar', overwrite_existing=True)
