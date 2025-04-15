@@ -466,7 +466,7 @@ def get_server_run_inputs(patient):
         # python edf_merge_dp01.py ~/ray/data_store2/OCD_SEEG/nihon_kohden/DP01 ~/ray/data_store2/OCD_SEEG/nihon_kohden/DP01/nkhdf5/DP01_edf_catalog.csv out-DP01-4.1 -l
             return [
                 '/data_store2/OCD_SEEG/nihon_kohden/DP01', 
-                'DP01_edf_catalog',
+                '/data_store2/OCD_SEEG/nihon_kohden/DP01/nkhdf5/DP01_edf_catalog.csv',
                 '/userdata/rzhao/out-DP01-4.1',
                 ]
 
