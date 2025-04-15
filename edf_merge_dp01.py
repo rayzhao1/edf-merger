@@ -14,7 +14,6 @@ Example - Default File Structure:
                         ├── PR03_2606.edf
                         └── PR03_2607.edf
 """
-
 from pathlib import Path
 import argparse
 from itertools import pairwise
@@ -75,6 +74,10 @@ class Interval:
     ):
         curr_edf_path = interval_files.pop(0)
         curr_edf = read_raw_edf_corrected(curr_edf_path, channels)
+<<<<<<< HEAD
+=======
+        print(curr_edf.ch_names)
+>>>>>>> ff2e223d0682646ee22cab587af11d3d47bdc391
         processed_edfs = []
         for next_edf_path in interval_files:
             print(f"Processing {curr_edf_path} and {next_edf_path}")
