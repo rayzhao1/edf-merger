@@ -325,11 +325,11 @@ def verify_night_ranges(patient, nights):
     
     def verify_night(night_num, expected_range, expected_len=None):
         correct_len = len(nights[night_num].intervals[0].files) == expected_len if expected_len else True
-        correct_files = [Path(fn).name for fn in nights[night_num].intervals[0].files] == [f'{patient}_{i:04}:.edf' for i in expected_range]
+        correct_files = [Path(fn).name for fn in nights[night_num].intervals[0].files] == [f'{patient}_{i:04}.edf' for i in expected_range]
         if not correct_len:
-            raise Exception(f'Expected {expected_len}, got length {len(nights[night_num].intervals[0].files)}')
+            raise Exception(f"Expected {expected_len}, got length {len(nights[night_num].intervals[0].files)}")
         if not correct_files:
-            raise Exception(f'Expected {[f'{patient}_{i:04}:.edf' for i in expected_range]}, got files {[Path(fn).name for fn in nights[night_num].intervals[0].files]}')
+            raise Exception(f"Expected {[f'{patient}_{i:04}.edf' for i in expected_range]}, got files {[Path(fn).name for fn in nights[night_num].intervals[0].files]}")
 
     def verify_dp01():
         """Total 9 nights."""
@@ -435,7 +435,7 @@ def resolve_args(args, strict=True):
     else:
         patient_dir = Path(args.edfs_dir)
         patient_name = patient_dir.name
-        catalog_path = args.catalog_path
+        catalog_path = Path(args.catalog_path)
 
     edfs_dir = patient_dir.joinpath(patient_name)
     
