@@ -1,6 +1,7 @@
 """
 Usage (all absolute paths):
     python edf_merge_dp01.py ~/ray/ucsf/data_store2/OCD_SEEG/nihon_kohden/DP01 ~/ray/ucsf/data_store2/OCD_SEEG/nihon_kohden/DP01/nkhdf5/DP01_edf_catalog.csv test-DP01-4.29 --local
+    submit_job -q pia-batch.q -c 8 -m 40 -o /userdata/rzhao/results.txt -n dp01 -x /userdata/rzhao/newenv/bin/python3 /userdata/rzhao/edf-merger/edf_merge_dp01.py
 
 Example - Default File Structure:
     .
@@ -472,7 +473,7 @@ def get_server_run_inputs(patient):
             return [
                 '/data_store2/OCD_SEEG/nihon_kohden/DP01', 
                 '/data_store2/OCD_SEEG/nihon_kohden/DP01/nkhdf5/DP01_edf_catalog.csv',
-                '/userdata/rzhao/out-DP01-4.1',
+                '/userdata/rzhao/out-DP01-4.30',
                 ]
 
 
