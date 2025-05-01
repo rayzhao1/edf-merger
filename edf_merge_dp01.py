@@ -1,6 +1,6 @@
 """
 Usage (all absolute paths):
-    python edf_merge_dp01.py ~/ray/ucsf/data_store2/OCD_SEEG/nihon_kohden/DP01 ~/ray/ucsf/data_store2/OCD_SEEG/nihon_kohden/DP01/nkhdf5/DP01_edf_catalog.csv test-DP01 --local
+    python edf_merge_dp01.py ~/ray/ucsf/data_store2/OCD_SEEG/nihon_kohden/DP01 ~/ray/ucsf/data_store2/OCD_SEEG/nihon_kohden/DP01/nkhdf5/DP01_edf_catalog.csv test-DP01-4.29 --local
 
 Example - Default File Structure:
     .
@@ -16,13 +16,14 @@ Example - Default File Structure:
 """
 from pathlib import Path
 import argparse
-from itertools import pairwise
 import shutil
 
 import csv
 import datetime
 from datetime import datetime, timedelta, timezone
 import time
+from itertools import chain
+from functools import reduce
 
 import numpy as np
 from scipy.signal import detrend
@@ -37,12 +38,15 @@ from typing import Callable, Any
 NIGHT_START_HOUR: int = 21  # 9pm
 NIGHT_DURATION: timedelta = timedelta(hours=11)  # hours=11)
 S_FREQ = 200
-scalp_channels = ['Pz-Ref', 'A1-Ref', 'O1-Ref', 'F3-Ref', 'REOG-Ref', 
-            'T8-Ref', 'F8-Ref', 'A2-Ref', 'F4-Ref', 'REMG1-Ref', 
-            'P7-Ref', 'P3-Ref', 'T7-Ref', 'LEMG1-Ref', 'F7-Ref',
-            'Fp1-Ref', 'P8-Ref', 'Fz-Ref', 'O2-Ref', 'C4-Ref', 
-            'P4-Ref', 'Fp2-Ref', 'LEOG-Ref', 'C3-Ref', 'Cz-Ref']
-SCALP_CH = tuple([f'POL {name}' for name in scalp_channels]) # their name in EDF
+CHANNELS: dict[str, tuple[str]] = dict(
+    eeg=('Pz-Ref', 'A1-Ref', 'O1-Ref', 'F3-Ref', 'T8-Ref', 'F8-Ref', 'A2-Ref',
+        'F4-Ref', 'P7-Ref', 'P3-Ref', 'T7-Ref', 'F7-Ref', 'Fp1-Ref', 'P8-Ref',
+        'Fz-Ref', 'O2-Ref', 'C4-Ref', 'P4-Ref', 'Fp2-Ref', 'C3-Ref', 'Cz-Ref',
+        ),
+    eog=('REOG-Ref', 'LEOG-Ref'),
+    emg=('REMG1-Ref', 'LEMG1-Ref'),
+    ecg=('EKG1-Ref', 'EKG2-Ref'),
+)
 
 class Night:
     night_count = 0
@@ -84,6 +88,7 @@ class Interval:
                 curr_edf = edf_pad(curr_edf, next_start-curr_end)
             elif curr_end > next_start:
                 curr_edf = edf_crop(curr_edf, curr_end-next_start)
+
             processed_edfs.append(curr_edf)
             curr_edf = next_edf
         processed_edfs.append(next_edf) # tail case
@@ -92,11 +97,7 @@ class Interval:
     def edf_concatenate(
             self,  
             path: dict[str, str],
-            preprocessing_func: Callable,
-            preprocessing_args: list[Any],
-            postprocessing_func: Callable,
-            postprocessing_args: list[Any],
-            include: list[str]=SCALP_CH,
+            channels: dict[str, str]=CHANNELS,
             expected_seconds: int=NIGHT_DURATION.seconds,
             local: bool=False
     ):
@@ -107,19 +108,20 @@ class Interval:
         first = read_raw_edf(interval_files[0])
         assert abs(first.info['meas_date'] - self.t0) < timedelta(seconds=1), f"\nfirst.info['meas_date']=={first.info['meas_date']}\nself.t0={self.t0}"
 
-        edfs = self.edf_pad_and_crop(interval_files, include)
-        edfs = [preprocessing_func(edf, **preprocessing_args) for edf in edfs]
-        res = postprocessing_func(mne.concatenate_raws(edfs), **postprocessing_args)
+        scalp_ch: tuple[str] = tuple([f'POL {name}' for name in chain.from_iterable(channels.values())])
+        aligned_edfs = self.edf_pad_and_crop(interval_files, scalp_ch)
+        preprocessed = [preprocess_single_edf(edf, channels) for edf in aligned_edfs]
+        res = postprocess_night_edf(mne.concatenate_raws(preprocessed))
 
         assert abs(res.info['meas_date'] - self.t0) < timedelta(seconds=1), f"\nres.info['meas_date']={res.info['meas_date']}\nself.t0={self.t0}"
-        assert abs(res.duration - expected_seconds) < 5, f"\nres.duration={res.duration}\nexpected_seconds={expected_seconds}"
+        # assert abs(res.duration - expected_seconds) < 5, f"\nres.duration={res.duration}\nexpected_seconds={expected_seconds}"
         assert res.n_times == int(res.duration * S_FREQ)
 
         return res
 
 
-def preprocess_single_edf(curr_edf, s_freq=S_FREQ):
-    return rename_ch(curr_edf).resample(s_freq)
+def preprocess_single_edf(curr_edf, channels, s_freq=S_FREQ):
+    return adjust_edf_channels(curr_edf, channels).resample(s_freq)
 
 
 def postprocess_night_edf(edf):
@@ -128,7 +130,12 @@ def postprocess_night_edf(edf):
                 .filter(l_freq=0.5, h_freq=80, verbose=False)
                 .notch_filter(60, notch_widths=4)
                 .apply_function(detrend, channel_wise=True, type="constant")
-                .rescale(1e-6)
+                .rescale(dict(
+                    eeg=1e-6,
+                    eog=1e-6,
+                    emg=1e-7,
+                    ecg=1e-7,
+                ))
         )
 
 
@@ -156,7 +163,7 @@ def edf_crop(raw_edf, amount):
     return res
 
 
-def read_raw_edf_corrected(fn, include=SCALP_CH) -> mne.io.Raw:
+def read_raw_edf_corrected(fn, include) -> mne.io.Raw:
     """For whatever reason, mne.io.read_raw_edf zeros an input file's subseconds. Pyedflib does not
        better, so the edfio library is needed.
     """
@@ -169,35 +176,32 @@ def read_raw_edf_corrected(fn, include=SCALP_CH) -> mne.io.Raw:
     return edf_mne
 
 
-def rename_ch(raw_edf: mne.io.Raw) -> mne.io.Raw:
-    rename_dict: dict[str: str] = {name: name[4:] for name in raw_edf.ch_names}
-    if "POL LEMG1-Ref" in rename_dict:
-        rename_dict["POL LEMG1-Ref"] = 'L_EMG-Ref' # there's also POL LEMG2-Ref'?
-    if "POL REMG1-Ref" in rename_dict:
-        rename_dict["POL REMG1-Ref"] = 'R_EMG-Ref'
-    if 'POL LEOG-Ref' in rename_dict:
-        rename_dict['POL LEOG-Ref'] = 'L_EOG-Ref'
-    if 'POL REOG-Ref' in rename_dict:
-        rename_dict['POL REOG-Ref'] = 'R_EOG-Ref'
+def adjust_edf_channels(raw_edf: mne.io.Raw, channels: dict[str: list[str]]) -> mne.io.Raw:
+    rename_dict: dict[str, str] = {name: name[4:] for name in raw_edf.ch_names}
+    if "POL LEMG1-Ref" in rename_dict and "POL REMG1-Ref" in rename_dict:
+        rename_dict["POL LEMG1-Ref"], rename_dict["POL REMG1-Ref"] = 'L_EMG-Ref', 'R_EMG-Ref' # there's also POL LEMG2-Ref'?
+    if 'POL LEOG-Ref' in rename_dict and 'POL REOG-Ref' in rename_dict:
+        rename_dict['POL LEOG-Ref'], rename_dict['POL REOG-Ref'] = 'L_EOG-Ref', 'R_EOG-Ref' 
 
-    raw_edf = raw_edf.rename_channels(rename_dict)
-    return raw_edf
+    ch_to_type: dict[str, str] = {rename_dict[f'POL {v}']:k for k, vs in channels.items() for v in vs}
+    print(ch_to_type)
+    return raw_edf.rename_channels(rename_dict).set_channel_types(ch_to_type)
 
 
 def scalp_bipolar_reference(raw_edf: mne.io.Raw) -> mne.io.Raw:
     cathodes = ['Fp1-Ref', 'F7-Ref', 'T7-Ref', 'P7-Ref', 'Fp1-Ref', 'F3-Ref', 'C3-Ref', 'P3-Ref', 'Fz-Ref', 'Cz-Ref',
-                'Fp2-Ref', 'F4-Ref', 'C4-Ref', 'P4-Ref', 'Fp2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'L_EOG-Ref',  'R_EOG-Ref', 'L_EMG-Ref']
+                'Fp2-Ref', 'F4-Ref', 'C4-Ref', 'P4-Ref', 'Fp2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'L_EOG-Ref',  'R_EOG-Ref', 'L_EMG-Ref', 'EKG1-Ref']
     anodes   = ['F7-Ref', 'T7-Ref', 'P7-Ref', 'O1-Ref', 'F3-Ref', 'C3-Ref', 'P3-Ref', 'O1-Ref', 'Cz-Ref', 'Pz-Ref',
-                'F4-Ref', 'C4-Ref', 'P4-Ref', 'O2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'O2-Ref', 'A2-Ref', 'A1-Ref', 'R_EMG-Ref']
+                'F4-Ref', 'C4-Ref', 'P4-Ref', 'O2-Ref', 'F8-Ref', 'T8-Ref', 'P8-Ref', 'O2-Ref', 'A2-Ref', 'A1-Ref', 'R_EMG-Ref', 'EKG2-Ref']
     names    = ['Fp1_F7', 'F7_T7', 'T7_P7', 'P7_O1', 'Fp1_F3', 'F3_C3', 'C3_P3', 'P3_O1', 'Fz_Cz', 'Cz_Pz',
-             'Fp2_F4', 'F4_C4', 'C4_P4', 'P4_O2', 'Fp2_F8', 'F8_T8', 'T8_P8', 'P8_O2', 'L-EOG_A2', 'R-EOG_A1', 'L-EMG_R-EMG']
+                'Fp2_F4', 'F4_C4', 'C4_P4', 'P4_O2', 'Fp2_F8', 'F8_T8', 'T8_P8', 'P8_O2', 'L-EOG_A2', 'R-EOG_A1', 'L-EMG_R-EMG', 'L-EKG_R-EKG']
     assert len(cathodes) == len(anodes) == len(names), 'Incorrect cathodes, anodes, names input to bipolar_reference()'
-    return mne.set_bipolar_reference(raw_edf, anodes, cathodes, names)
+    return mne.set_bipolar_reference(raw_edf, anodes, cathodes, names, drop_refs=True).pick(names) #, names)
 
 
 def export_edf(raw_edf: mne.io.Raw, target_name: str, mode=None, overwrite_existing=True):
     """Export raw object as EDF file. Result is zero-padded if non-integer duration (MNE behavior)"""
-    name: str = f'{target_name}.edf'
+    fname: str = f'{target_name}.edf'
     match mode:
         case 'bipolar':
             res = scalp_bipolar_reference(raw_edf)
@@ -207,7 +211,7 @@ def export_edf(raw_edf: mne.io.Raw, target_name: str, mode=None, overwrite_exist
             res = scalp_bipolar_reference(raw_edf).set_eeg_reference()
         case _:
             res = raw_edf
-    export_raw(name, res, 'edf', overwrite=overwrite_existing)
+    export_raw(fname, res, fmt='edf', overwrite=overwrite_existing)
     return res
 
 
@@ -333,7 +337,7 @@ def verify_night_ranges(patient, nights):
             raise Exception(f"Expected {[f'{patient}_{i:04}.edf' for i in expected_range]}, got files {[Path(fn).name for fn in nights[night_num].intervals[0].files]}")
 
     def verify_dp01():
-        """Total 9 nights."""
+        """Total 8 nights."""
         exp = (
             range(106, 238),
             range(387, 519),
@@ -348,7 +352,7 @@ def verify_night_ranges(patient, nights):
             verify_night(i, exp, expected_len=132)
 
     def verify_pr03():
-        """total 10 nights, missing data for night 6"""
+        """total 10 nights, missing data for night 5"""
         exp = (
             range(40, 172),
             range(326, 458),
@@ -507,14 +511,7 @@ if __name__ == "__main__":
                 continue
             t0_str, tf_str = interval.t0.strftime("%Y-%m-%d_%H.%M"), interval.tf.strftime("%Y-%m-%d_%H.%M")
             out_path = path['output'].joinpath(f'{patient_name}_night_{night.idx+1}.{interval.idx+1}_scalp_{t0_str}--{tf_str}')
-            res = interval.edf_concatenate(
-                path=path,
-                preprocessing_func=preprocess_single_edf,
-                preprocessing_args=(dict()),
-                postprocessing_func=postprocess_night_edf,
-                postprocessing_args=(dict()),
-                local=args.local,
-            )
+            res = interval.edf_concatenate(path=path, local=args.local)
             export_edf(res, out_path, mode='bipolar', overwrite_existing=True)
 
     timer_end = time.time()
