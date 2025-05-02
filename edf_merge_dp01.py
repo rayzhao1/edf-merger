@@ -97,6 +97,7 @@ class Interval:
     
     def edf_concatenate(
             self,  
+            patient: str,
             path: dict[str, str],
             channels: dict[str, str]=CHANNELS,
             expected_seconds: int=NIGHT_DURATION.seconds,
@@ -111,7 +112,7 @@ class Interval:
 
         scalp_ch: tuple[str] = tuple([f'POL {name}' for name in chain.from_iterable(channels.values())])
         aligned_edfs = self.edf_pad_and_crop(interval_files, scalp_ch)
-        preprocessed = [preprocess_single_edf(edf, channels) for edf in aligned_edfs]
+        preprocessed = [preprocess_single_edf(edf, patient, channels) for edf in aligned_edfs]
         res = postprocess_night_edf(mne.concatenate_raws(preprocessed))
 
         assert abs(res.info['meas_date'] - self.t0) < timedelta(seconds=1), f"\nres.info['meas_date']={res.info['meas_date']}\nself.t0={self.t0}"
@@ -121,8 +122,8 @@ class Interval:
         return res
 
 
-def preprocess_single_edf(curr_edf, channels, s_freq=S_FREQ):
-    return adjust_edf_channels(curr_edf, channels).resample(s_freq)
+def preprocess_single_edf(curr_edf, patient, channels, s_freq=S_FREQ):
+    return adjust_edf_channels(curr_edf, patient, channels).resample(s_freq)
 
 
 def postprocess_night_edf(edf):
@@ -177,15 +178,33 @@ def read_raw_edf_corrected(fn, include) -> mne.io.Raw:
     return edf_mne
 
 
-def adjust_edf_channels(raw_edf: mne.io.Raw, channels: dict[str: list[str]]) -> mne.io.Raw:
+def adjust_edf_channels(raw_edf: mne.io.Raw, patient: str, channels: dict[str: list[str]]) -> mne.io.Raw:
     rename_dict: dict[str, str] = {name: name[4:] for name in raw_edf.ch_names}
-    if "POL LEMG1-Ref" in rename_dict and "POL REMG1-Ref" in rename_dict:
-        rename_dict["POL LEMG1-Ref"], rename_dict["POL REMG1-Ref"] = 'L_EMG-Ref', 'R_EMG-Ref' # there's also POL LEMG2-Ref'?
-    if 'POL LEOG-Ref' in rename_dict and 'POL REOG-Ref' in rename_dict:
-        rename_dict['POL LEOG-Ref'], rename_dict['POL REOG-Ref'] = 'L_EOG-Ref', 'R_EOG-Ref' 
-
+    # (1) Standardize naming for certain channels
+    match patient:
+        case 'DP01':
+            rename_keys =dict(
+                l_emg='POL LEMG1-Ref',
+                r_emg='POL REMG1-Ref',
+                l_eog='POL LEOG-Ref',
+                r_eog='POL REOG-Ref',
+            ),
+        case 'PR03':
+            rename_keys=dict(
+                l_emg='POL L EMG-Ref',
+                r_emg='POL R EMG-Ref',
+                l_eog='POL L EOG-Ref',
+                r_eog='POL R EOG-Ref',
+            ),
+        case 'PR07':
+            raise NotImplementedError
+        case _:
+            raise Exception(f'Unexpected patient ID: {patient}')
+    rename_keys['l_emg'], rename_keys['r_emg'] = 'L_EMG-Ref', 'R_EMG-Ref'
+    rename_keys['l_eog'], rename_keys['r_eog'] = 'L_EOG-Ref', 'R_EOG-Ref'
+    # (2) Set channel type for each channel
     ch_to_type: dict[str, str] = {rename_dict[f'POL {v}']:k for k, vs in channels.items() for v in vs}
-    print(ch_to_type)
+
     return raw_edf.rename_channels(rename_dict).set_channel_types(ch_to_type)
 
 
@@ -512,7 +531,7 @@ if __name__ == "__main__":
                 continue
             t0_str, tf_str = interval.t0.strftime("%Y-%m-%d_%H.%M"), interval.tf.strftime("%Y-%m-%d_%H.%M")
             out_path = path['output'].joinpath(f'{patient_name}_night_{night.idx+1}.{interval.idx+1}_scalp_{t0_str}--{tf_str}')
-            res = interval.edf_concatenate(path=path, local=args.local)
+            res = interval.edf_concatenate(patient=PATIENT, path=path, local=args.local)
             export_edf(res, out_path, mode='bipolar', overwrite_existing=True)
 
     timer_end = time.time()
