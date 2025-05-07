@@ -215,7 +215,6 @@ def export_edf(raw_edf: mne.io.Raw, channel_info, target_name: str, mode=None, o
 
 
 def str_to_time(time_str: str, time_format='%Y-%m-%d %H:%M:%S') -> datetime:
-    print(time_str)
     if '.' in time_str:
         return datetime.strptime(time_str.split('.')[0], time_format).replace(tzinfo=timezone.utc)
     elif '+' in time_str: # DP01
@@ -499,7 +498,11 @@ def get_channel_info(patient, channels: dict[str, str]):
                 lekg: None, rekg:  None
             }
         case 'PR07':
-            raise NotImplementedError
+            new_to_old={
+                lemg: 'EMG1-Ref', remg: 'EMG2-Ref',
+                leog: 'L EOG-Ref', reog: 'R EOG-Ref',
+                lekg: 'EKG1-Ref', rekg:  'EKG2-Ref'
+            }
         case _:
             raise Exception(f'Unexpected patient ID: {patient}')
         

@@ -183,25 +183,25 @@ def adjust_edf_channels(raw_edf: mne.io.Raw, patient: str, channels: dict[str: l
     # (1) Standardize naming for certain channels
     match patient:
         case 'DP01':
-            rename_keys =dict(
+            ch_name =dict(
                 l_emg='POL LEMG1-Ref',
                 r_emg='POL REMG1-Ref',
                 l_eog='POL LEOG-Ref',
                 r_eog='POL REOG-Ref',
-            ),
+            )
         case 'PR03':
-            rename_keys=dict(
+            ch_name=dict(
                 l_emg='POL L EMG-Ref',
                 r_emg='POL R EMG-Ref',
                 l_eog='POL L EOG-Ref',
                 r_eog='POL R EOG-Ref',
-            ),
+            )
         case 'PR07':
             raise NotImplementedError
         case _:
             raise Exception(f'Unexpected patient ID: {patient}')
-    rename_keys['l_emg'], rename_keys['r_emg'] = 'L_EMG-Ref', 'R_EMG-Ref'
-    rename_keys['l_eog'], rename_keys['r_eog'] = 'L_EOG-Ref', 'R_EOG-Ref'
+    rename_dict[ch_name['l_emg']], rename_dict[ch_name['r_emg']] = 'L_EMG-Ref', 'R_EMG-Ref'
+    rename_dict[ch_name['l_eog']], rename_dict[ch_name['r_eog']] = 'L_EOG-Ref', 'R_EOG-Ref'
     # (2) Set channel type for each channel
     ch_to_type: dict[str, str] = {rename_dict[f'POL {v}']:k for k, vs in channels.items() for v in vs}
 
