@@ -609,7 +609,7 @@ def get_channel_info(patient, channels: dict[str, str]):
 if __name__ == "__main__":
     timer_start = time.time()
 
-    PATIENT = 'PR07' # Must set if on server
+    PATIENT = 'DP02' # Must set if on server
     # Process command-line args
     parser = argparse.ArgumentParser(description='EDF Merger')
     parser.add_argument("edfs_dir",
