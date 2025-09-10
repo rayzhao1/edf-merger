@@ -1,7 +1,7 @@
 """
 Usage (all absolute paths):
     python edf_merge_dp02.py ~/ray/ucsf/data_store2/OCD_SEEG/DP02 ~/ray/ucsf/data_store2/OCD_SEEG/DP02/derivatives/DP02_edf_catalog.csv out-DP02-9.9 --sort --local
-    submit_job -q pia-batch.q -c 8 -m 40 -o /userdata/rzhao/results.txt -n dp02 -x /userdata/rzhao/newenv/bin/python3 /userdata/rzhao/edf-merger/edf_merge_dp02.py
+    submit_job -q pia-batch.q -c 8 -m 40 -o /userdata/rzhao/results-dp02.txt -n dp02 -x /userdata/rzhao/newenv/bin/python3 /userdata/rzhao/edf-merger/edf_merge_dp02.py
 
 Example - Default File Structure:
     .
@@ -538,7 +538,7 @@ def get_server_run_inputs(patient):
                 '/data_store2/OCD_SEEG/nihon_kohden/DP02', 
                 '/data_store2/OCD_SEEG/nihon_kohden/DP02/derivatives/DP02_edf_catalog.csv',
                 '/userdata/rzhao/out-DP02-9.9',
-                True, # CSV needs sort
+                '-s', # CSV needs sort
             ]
         case 'PR07':
             return [
