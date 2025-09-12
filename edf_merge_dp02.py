@@ -82,7 +82,7 @@ class Interval:
             return [curr_edf]
         processed_edfs = []
         for next_edf_path in interval_files:
-            print(f"Processing {curr_edf_path} and {next_edf_path}")
+            print(f"\nProcessing {curr_edf_path} and {next_edf_path}")
             next_edf = read_raw_edf_corrected(next_edf_path, channel_dict)
             curr_end, next_start = curr_edf.info['meas_date']+timedelta(seconds=curr_edf.duration), next_edf.info['meas_date']
 
@@ -92,6 +92,7 @@ class Interval:
                 curr_edf = edf_crop(curr_edf, curr_end-next_start)
 
             processed_edfs.append(curr_edf)
+            curr_edf_path = next_edf_path
             curr_edf = next_edf
         processed_edfs.append(next_edf) # tail case
         return processed_edfs
@@ -117,7 +118,7 @@ class Interval:
 
         assert abs(res.info['meas_date'] - self.t0) < timedelta(seconds=1), f"\nres.info['meas_date']={res.info['meas_date']}\nself.t0={self.t0}"
         # assert abs(res.duration - expected_seconds) < 5, f"\nres.duration={res.duration}\nexpected_seconds={expected_seconds}"
-        assert res.n_times == round(res.duration * S_FREQ), f"res.n_times = {res.n_times}, int(res.duration * S_FREQ) = {round(res.duration * S_FREQ)}"
+        assert res.n_times == round(res.duration * S_FREQ), f"res.n_times = {res.n_times}, round(res.duration * S_FREQ) = {round(res.duration * S_FREQ)}"
 
         return res
 
@@ -142,7 +143,8 @@ def edf_pad(raw_edf, amount):
     curr_data = raw_edf.get_data()  # Last time point in seconds
     sfreq = raw_edf.info['sfreq']
     old = raw_edf.duration
-    pad_samples = int(amount.seconds * sfreq)
+    total_seconds = amount / timedelta(seconds=1)
+    pad_samples = int(round(total_seconds * sfreq))
 
     pad_data = np.zeros((len(raw_edf.ch_names), pad_samples))
     new_data = np.hstack((curr_data, pad_data))
@@ -150,20 +152,21 @@ def edf_pad(raw_edf, amount):
     # Create new info object
     new_info = raw_edf.info.copy()
     res = mne.io.RawArray(new_data, new_info)
-    print(f"Attempted to pad {amount}: From {old} to {res.duration}.")
+    print(f"Padded {amount}: From {old} to {res.duration}.")
     return res
 
 
 def edf_crop(raw_edf, amount):
-    amount_sec = amount.microseconds * 1e-6 # Raw.crop wants seconds, and .seconds kills subsecond resolution
+    total_microseconds = amount / timedelta(microseconds=1)
+    amount_sec = total_microseconds * 1e-6 # Raw.crop wants seconds, and .seconds kills subsecond resolution
     old = raw_edf.duration
     res = raw_edf.copy().crop(tmin=0, tmax=raw_edf.duration-amount_sec, include_tmax=False)
-    print(f"Attempted to crop {amount_sec} seconds: From {old} to {res.duration}.")
+    print(f"Cropped {amount_sec} seconds: From {old} to {res.duration}.")
     return res
 
 
 def read_raw_edf_corrected(fn, channel_dict) -> mne.io.Raw:
-    """For whatever reason, mne.io.read_raw_edf zeros an input file's subseconds. Pyedflib does not
+    """For whatever reason, mne.io.read_raw_edf zeros an input file's subseconds. Pyedflib does not do
        better, so the edfio library is needed.
     """
     chnames, ch_to_rename, ch_to_type = [], {}, {}
