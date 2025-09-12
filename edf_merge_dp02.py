@@ -289,7 +289,9 @@ def csv_parse_nights(
             if curr_time_start >= end:
                 curr_interval.tf = prev_time_end
                 curr_night.add(curr_interval)
-                nights.append(curr_night)
+                # There are nights with partial recordings which we want to ignore (see DP02 5/18)
+                if sum([len(interval.files) for interval in curr_night.intervals]) > 0:
+                    nights.append(curr_night)
                 curr_interval = Interval()
                 curr_night = Night()
                 # Update [start, end] time interval for next night
@@ -329,7 +331,8 @@ def csv_parse_nights(
         if curr_interval.files:
             curr_interval.tf = prev_time_end
             curr_night.add(curr_interval)
-            nights.append(curr_night)
+            if sum([len(interval.files) for interval in curr_night.intervals]) > 0:
+                nights.append(curr_night)
 
     if not local: # Only perform verification if on server
         verify_night_ranges(patient_name, nights)
@@ -344,9 +347,13 @@ def verify_night_ranges(patient, nights):
         correct_len = len(nights[night_num].intervals[0].files) == expected_len if expected_len else True
         correct_files = [Path(fn).name for fn in nights[night_num].intervals[0].files] == [f'{patient}_{i:04}.edf' for i in expected_range]
         if not correct_len:
-            raise Exception(f"Expected {expected_len}, got length {len(nights[night_num].intervals[0].files)}")
+            for night in nights:
+                for interval in night.intervals:
+                    print(interval.files)
+                print("\n")
+            raise Exception(f"Expected {expected_len} for night {night_num}, got length {len(nights[night_num].intervals[0].files)}")
         if not correct_files:
-            raise Exception(f"Expected {[f'{patient}_{i:04}.edf' for i in expected_range]}, got files {[Path(fn).name for fn in nights[night_num].intervals[0].files]}")
+            raise Exception(f"Expected {[f'{patient}_{i:04}.edf' for i in expected_range]} for night {night_num}, got files {[Path(fn).name for fn in nights[night_num].intervals[0].files]}")
 
     def verify_dp01():
         """Total 8 nights."""
@@ -535,8 +542,8 @@ def get_server_run_inputs(patient):
                 ]
         case 'DP02':
             return [
-                '/data_store2/OCD_SEEG/nihon_kohden/DP02', 
-                '/data_store2/OCD_SEEG/nihon_kohden/DP02/derivatives/DP02_edf_catalog.csv',
+                '/data_store2/OCD_SEEG/DP02', 
+                '/data_store2/OCD_SEEG/DP02/derivatives/DP02_edf_catalog.csv',
                 '/userdata/rzhao/out-DP02-9.9',
                 '-s', # CSV needs sort
             ]
@@ -633,6 +640,7 @@ if __name__ == "__main__":
         csv_in=path['meta'], 
         key=get_patient_csv_key(patient_name), 
         all_files=set([p.name for p in path['edfs'].iterdir()]), 
+        margin=timedelta(seconds=15),
         sort=args.sort,
         local=args.local,
         test_mode=False,
