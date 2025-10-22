@@ -1,7 +1,7 @@
 """
 Usage (all absolute paths):
-    python edf_merge_pr09.py ~/ray/ucsf/data_store2/presidio/nihon_kohden/PR09 ~/ray/ucsf/data_store2/presidio/nihon_kohden/PR09/catalogs/sub-PR09_edf-catalog.csv out-PR09-10.9 --local
-    submit_job -q pia-batch.q -c 8 -m 40 -o /userdata/rzhao/results-pr09.txt -n pr08 -x /userdata/rzhao/newenv/bin/python3 /userdata/rzhao/edf-merger/edf_merge_pr09.py
+    python edf_merge_pr04.py ~/ray/ucsf/data_store2/presidio/nihon_kohden/PR04 ~/ray/ucsf/data_store2/presidio/nihon_kohden/PR04/catalogs/sub-PR04_edf-catalog.csv out-PR04-10.22 --local
+    submit_job -q pia-batch.q -c 8 -m 40 -o /userdata/rzhao/results-pr04.txt -n pr04 -x /userdata/rzhao/newenv/bin/python3 /userdata/rzhao/edf-merger/edf_merge_pr04.py
 
 Example - Default File Structure:
     .
@@ -123,16 +123,17 @@ class Interval:
 
 def postprocess_night_edf(edf, channel_dict):
     # 1) bandpass for neural data 2) bandstop for electrical noise 3) demean 4) scale 
+    # currently know scalp and ECG is recorded in mV. EOG/EMG is assumed to be mV for now.
     chtypes = set([channel_dict[k][1] for k in channel_dict])
     return (edf
                 .filter(l_freq=0.5, h_freq=80, verbose=False)
                 .notch_filter(60, notch_widths=4)
                 .apply_function(detrend, channel_wise=True, type="constant")
                 .rescale({k:v for k,v in dict(
-                    eeg=1e-6,
+                    eeg=1e-4,
                     eog=1e-6,
-                    emg=1e-7,
-                    ecg=1e-7,
+                    emg=1e-6,
+                    ecg=1e-4,
                 ).items() if k in chtypes})
         )
 
@@ -381,7 +382,7 @@ def verify_night_ranges(patient, nights):
             verify_night(i, exp, expected_len=132)
 
     def verify_dp02():
-        """Total 10 nights."""
+        """Total 11 nights, but night 3 incomplete"""
         exp = (
             range(47, 179),
             range(333, 465),
@@ -410,6 +411,23 @@ def verify_night_ranges(patient, nights):
             None,               # range(1914, 2046),
             None,               # range(2200, 2332),
             None,               # range(2481, 2613),
+        )
+        for i, exp in enumerate(exp):
+            if exp:
+                verify_night(i, exp)
+    
+    def verify_pr04():
+        """total 10 nights, but night 2 incomplete"""
+        exp = (
+            range(21, 153),
+            range(483, 615),
+            range(771, 903),
+            range(1058, 1192), # 134 files
+            range(1347, 1479),
+            range(1633, 1765),
+            range(1920, 2052),
+            range(2206, 2338),
+            range(2492, 2624)
         )
         for i, exp in enumerate(exp):
             if exp:
@@ -485,6 +503,8 @@ def verify_night_ranges(patient, nights):
             verify_dp02()
         case 'PR03':
             verify_pr03()
+        case 'PR04':
+            verify_pr04()            
         case 'PR05':
             verify_pr05()
         case 'PR07':
@@ -525,6 +545,14 @@ def get_patient_csv_key(patient_id: str):
                 edf_path=2,
                 ch_names=7,
             )
+        case 'PR04':
+            key = dict(
+                start=1,
+                end=2,
+                edf_name=0,
+                edf_path=7,
+                ch_names=None,
+            )            
         case 'PR07':
             key = dict(
                 start=1,
@@ -594,8 +622,6 @@ def resolve_args(args, strict=True):
 
 def get_server_run_inputs(patient):
     match patient:
-        case 'PR03':
-            return ['PR03', 'PR03_EDFMeta', 'out-PR03-5.1']
         case 'DP01':
             return [
                 '/data_store2/OCD_SEEG/nihon_kohden/DP01', 
@@ -609,6 +635,14 @@ def get_server_run_inputs(patient):
                 '/userdata/rzhao/out-DP02-9.9',
                 '-s', # CSV needs sort
             ]
+        case 'PR03':
+            return ['PR03', 'PR03_EDFMeta', 'out-PR03-5.1']
+        case 'PR04':
+            return [
+                '/data_store2/presidio/nihon_kohden/PR04', 
+                '/data_store2/presidio/nihon_kohden/PR08/catalogs/sub-PR04_edf-catalog.csv',
+                '/userdata/rzhao/out-PR04-10.22',
+                ]        
         case 'PR07':
             return [
                 '/data_store0/presidio/nihon_kohden/PR07', 
@@ -657,6 +691,12 @@ def get_channel_info(patient, channels: dict[str, str]):
                 leog: 'L EOG-Ref', reog: 'R EOG-Ref',
                 lekg: None, rekg:  None
             }
+        case 'PR04':
+            new_to_old={
+                lemg: 'L EMG-Ref', remg: 'R EMG-Ref',
+                leog: 'L EOG-Ref', reog: 'R EOG-Ref',
+                lekg: None, rekg:  None
+            }            
         case 'PR07':
             new_to_old={
                 lemg: 'EMG1-Ref', remg: 'EMG2-Ref',
@@ -702,7 +742,7 @@ def get_channel_info(patient, channels: dict[str, str]):
 if __name__ == "__main__":
     timer_start = time.time()
 
-    PATIENT = 'PR09' # Must set if on server
+    PATIENT = 'PR04' # Must set if on server
     # Process command-line args
     parser = argparse.ArgumentParser(description='EDF Merger')
     parser.add_argument("edfs_dir",
