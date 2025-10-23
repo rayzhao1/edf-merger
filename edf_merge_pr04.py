@@ -640,7 +640,7 @@ def get_server_run_inputs(patient):
         case 'PR04':
             return [
                 '/data_store2/presidio/nihon_kohden/PR04', 
-                '/data_store2/presidio/nihon_kohden/PR08/catalogs/sub-PR04_edf-catalog.csv',
+                '/data_store2/presidio/nihon_kohden/PR04/catalogs/sub-PR04_edf-catalog.csv',
                 '/userdata/rzhao/out-PR04-10.22',
                 ]        
         case 'PR07':
