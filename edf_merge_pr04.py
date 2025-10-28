@@ -24,7 +24,6 @@ import datetime
 from datetime import datetime, timedelta, timezone
 import time
 
-import pandas as pd
 import numpy as np
 from scipy.signal import detrend
 import mne
@@ -34,7 +33,9 @@ from edfio import read_edf
 
 
 NIGHT_START_HOUR: int = 21  # 9pm
-NIGHT_DURATION: timedelta = timedelta(hours=11)  # hours=11)
+# Let NIGHT_DURATION - NIGHT_MARGIN be the min length of a valid full night of recordings
+NIGHT_DURATION: timedelta = timedelta(hours=11)
+NIGHT_MARGIN: timedelta = timedelta(minutes=10)
 S_FREQ = 200
 CHANNELS: dict[str, tuple[str]] = dict(
     eeg=('Pz-Ref', 'A1-Ref', 'O1-Ref', 'F3-Ref', 'T8-Ref', 'F8-Ref', 'A2-Ref',
@@ -123,12 +124,12 @@ class Interval:
 
 def postprocess_night_edf(edf, channel_dict):
     # 1) bandpass for neural data 2) bandstop for electrical noise 3) demean 4) scale 
-    # currently know scalp and ECG is recorded in mV. EOG/EMG is assumed to be mV for now.
     chtypes = set([channel_dict[k][1] for k in channel_dict])
     return (edf
                 .filter(l_freq=0.5, h_freq=80, verbose=False)
                 .notch_filter(60, notch_widths=4)
                 .apply_function(detrend, channel_wise=True, type="constant")
+                # currently know scalp and ECG is recorded in mV. EOG/EMG is assumed to be uV for now.
                 .rescale({k:v for k,v in dict(
                     eeg=1e-4,
                     eog=1e-6,
@@ -250,11 +251,12 @@ def csv_parse_nights(
     all_files,
     night_start_hour: int=NIGHT_START_HOUR,
     night_duration: timedelta=NIGHT_DURATION, 
+    night_margin: timedelta=NIGHT_MARGIN,
     idx=None, 
-    margin=timedelta(seconds=0),
+    edf_margin=timedelta(seconds=0),
     sort=False,
     local=True,
-    test_mode=False,
+    debug_mode=False,
 ) -> list[Night]:
     """Iterate through 'csv_in' and return a list of Nights, where each Night contains a list of contiguous interval of EDF file
        names such that each EDF is less than 'margin' away from the next file in time. This implementation relies on the
@@ -291,9 +293,13 @@ def csv_parse_nights(
             if curr_time_start >= end:
                 curr_interval.tf = prev_time_end
                 curr_night.add(curr_interval)
-                # There are nights with partial recordings which we want to ignore (see DP02 5/18)
-                if sum([len(interval.files) for interval in curr_night.intervals]) > 0:
+                # There are days with no night recordings which we want to ignore (see DP02 5/18)
+                # There are also days with recordings for only a portion of the night which we also want to ignore (see PR04 9/1)
+                if sum([len(interval.files) for interval in curr_night.intervals]) > 0 and curr_interval.tf - curr_interval.t0 >= night_duration - night_margin:
+                    print(f"Night appended: Start={curr_interval.t0} End={curr_interval.tf}")
                     nights.append(curr_night)
+                else:
+                    print(f"Night skipped: Start={curr_interval.t0} End={curr_interval.tf}")
                 curr_interval = Interval()
                 curr_night = Night()
                 # Update [start, end] time interval for next night
@@ -304,18 +310,14 @@ def csv_parse_nights(
             if not curr_interval.files:
                 curr_interval.t0 = curr_time_start
             # (4) Sanity check - does EDF listed in catalog actually exist in directory
-            if curr_name not in all_files:
-                if strict:
-                    raise Exception(f'File {curr_name} not found in directory.')
-                else:
-                    if not test_mode:
-                        print(f'Warning - {curr_name} not found in EDF directory.')
+            if curr_name not in all_files and strict:
+                raise Exception(f'File {curr_name} not found in directory.')
             # (5) Sanity check - Very rare (PR03), some files do not not have scalp data
             if ch_name_idx and 'POL Fp1-Ref' not in eval(row[ch_name_idx]):
                 continue
             # (6) If there is a discontinuity, create a new Interval for the current night.
-            if curr_time_start - prev_time_end > margin:
-                print(curr_time_start - prev_time_end, margin)
+            if curr_time_start - prev_time_end > edf_margin:
+                print(curr_time_start - prev_time_end, edf_margin)
                 if curr_interval.files: # make sure the discontinuity exists with a file that is in the interval
                     print(f'Discontinuity at {curr_name}')
                     curr_interval.tf = prev_time_end
@@ -327,15 +329,18 @@ def csv_parse_nights(
             else:
                 vals = row[edf_path_idx]
             curr_interval.add(vals)
-            if test_mode:
+            if debug_mode:
                 print(vals)
             prev_time_end = curr_time_end
         # Tail case
         if curr_interval.files:
             curr_interval.tf = prev_time_end
             curr_night.add(curr_interval)
-            if sum([len(interval.files) for interval in curr_night.intervals]) > 0:
+            if sum([len(interval.files) for interval in curr_night.intervals]) > 0 and curr_interval.tf - curr_interval.t0 >= night_duration - night_margin:
+                print(f"Night appended: Start={curr_interval.t0} End={curr_interval.tf}")
                 nights.append(curr_night)
+            else:
+                print(f"Night skipped: Start={curr_interval.t0} End={curr_interval.tf}")
 
     if not local: # Only perform verification if on server
         verify_night_ranges(patient_name, nights)
@@ -761,15 +766,17 @@ if __name__ == "__main__":
         args = parser.parse_args(get_server_run_inputs(PATIENT))
 
     patient_name, path = resolve_args(args, strict=not args.local)
+    if args.sort:
+        import pandas as pd
     # (2) Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
     nights: list[Night] = csv_parse_nights(
         csv_in=path['meta'], 
         key=get_patient_csv_key(patient_name), 
         all_files=set([p.name for p in path['edfs'].iterdir()]), 
-        margin=timedelta(minutes=5),
+        edf_margin=timedelta(minutes=5),
         sort=args.sort,
         local=args.local,
-        test_mode=True,
+        debug_mode=False,
     )
     # (3) For each night, export one merged file for each continuous time-interval for each night.
     for night in nights:
