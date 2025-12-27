@@ -328,7 +328,7 @@ def csv_parse_nights(
             if idx:
                 vals = tuple([curr_path] + [row[i] for i in idx])
             else:
-                vals = row[edf_path_idx]
+                vals = curr_path
             curr_interval.add(vals)
             if debug_mode:
                 print(vals)
@@ -348,29 +348,33 @@ def csv_parse_nights(
 
     return nights
 
-
 def verify_night_ranges(patient, nights):
-    """Hard-coded verification. Ranges are (inclusive, exclusive]"""
+    """Hard-coded verification. Ranges are (inclusive, exclusive
+       Assumption, that is assumed to be correct, is that each night only has one interval.
+    ]"""
     
     def verify_night(
             night_num: int, 
             expected_range: range | tuple[range, tuple], 
             expected_len=None
         ):
+        night = nights[night_num]
+        
         omit = tuple()
         if not isinstance(expected_range, range):
             expected_range, omit = expected_range
-        print(expected_range, omit)
-        correct_len = len(nights[night_num].intervals[0].files) == expected_len if expected_len else True
-        correct_files = [Path(fn).name for fn in nights[night_num].intervals[0].files] == [f'{patient}_{i:04}.edf' for i in expected_range if i not in omit]
+        
+        if isinstance(night.intervals[0].files[0], str):
+            fns = night.intervals[0].files
+        else:
+            fns = [tup[0] for tup in night.intervals] # filename is first item by default
+
+        correct_len = len(night.intervals[0].files) == expected_len if expected_len else True
+        correct_files = [Path(fn).name for fn in fns] == [f'{patient}_{i:04}.edf' for i in expected_range if i not in omit]
         if not correct_len:
-            for night in nights:
-                for interval in night.intervals:
-                    print(interval.files)
-                print("\n")
-            raise Exception(f"Expected {expected_len} for night {night_num}, got length {len(nights[night_num].intervals[0].files)}")
+            raise Exception(f"Expected {expected_len} for night {night_num}, got length {len(fns)}")
         if not correct_files:
-            raise Exception(f"Expected {[f'{patient}_{i:04}.edf' for i in expected_range]} for night {night_num}, got files {[Path(fn).name for fn in nights[night_num].intervals[0].files]}")
+            raise Exception(f"Expected {[f'{patient}_{i:04}.edf' for i in expected_range]} for night {night_num}, got files {[Path(fn).name for fn in night.intervals[0].files]}")
 
     def verify_dp01():
         """Total 8 nights."""
