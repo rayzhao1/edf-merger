@@ -247,7 +247,7 @@ def round_day(dt):
 
 def csv_parse_nights(
     csv_in: str, 
-    key: dict[str, str], 
+    patient_name: str,
     all_files,
     night_start_hour: int=NIGHT_START_HOUR,
     night_duration: timedelta=NIGHT_DURATION, 
@@ -263,6 +263,7 @@ def csv_parse_nights(
        fact that csv_in is sorted in time-chronological order. All returned EDF files are also constrained to be in the
        time range between 'start' and 'start + duration'.
     """
+    key = get_patient_csv_key(patient_name)
     strict = not local
     start_idx, end_idx = key['start'], key['end']
     edf_name_idx, edf_path_idx = key['edf_name'], key['edf_path']
@@ -771,7 +772,7 @@ if __name__ == "__main__":
     # (2) Retrieve list of sub lists. Each sublist is a set of continuous, in-range file names.
     nights: list[Night] = csv_parse_nights(
         csv_in=path['meta'], 
-        key=get_patient_csv_key(patient_name), 
+        patient_name=patient_name, 
         all_files=set([p.name for p in path['edfs'].iterdir()]), 
         edf_margin=timedelta(minutes=5),
         sort=args.sort,
