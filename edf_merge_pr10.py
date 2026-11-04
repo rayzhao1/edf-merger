@@ -37,8 +37,7 @@ PR10_TIME_SHIFT = timedelta(days=4)
 
 def is_edf_flagged_for_pr10_shift(fn):
     patient, file_num_str = Path(fn).stem.split('_')
-    if patient == 'PR10':
-        return int(file_num_str) in PR10_FLAGGED_FILE_NUMS
+    return patient == 'PR10' and int(file_num_str) in PR10_FLAGGED_FILE_NUMS
 
 NIGHT_START_HOUR: int = 21  # 9pm
 # Let NIGHT_DURATION - NIGHT_MARGIN be the min length of a valid full night of recordings
@@ -119,7 +118,7 @@ class Interval:
         first = read_raw_edf(interval_files[0])
         assert abs(first.info['meas_date'] - self.t0) < timedelta(seconds=1), f"\nfirst.info['meas_date']=={first.info['meas_date']}\nself.t0={self.t0}"
 
-        aligned_edfs = self.edf_pad_and_crop(interval_files, channel_dict)
+        aligned_edfs = self.edf_pad_and_crop(interval_files.copy(), channel_dict)
         preprocessed = [edf.resample(s_freq) for edf in aligned_edfs]
         res = postprocess_night_edf(mne.concatenate_raws(preprocessed), channel_dict)
 
@@ -127,9 +126,11 @@ class Interval:
         # assert abs(res.duration - expected_seconds) < 5, f"\nres.duration={res.duration}\nexpected_seconds={expected_seconds}"
         assert res.n_times == round(res.duration * S_FREQ), f"res.n_times = {res.n_times}, round(res.duration * S_FREQ) = {round(res.duration * S_FREQ)}"
 
-        if is_edf_flagged_for_pr10_shift(interval_files[0]) and is_edf_flagged_for_pr10_shift(interval_files[-1]):
+        if all(is_edf_flagged_for_pr10_shift(fn) for fn in interval_files):
+            print(f"The concatenated result starting at {interval_files[0]} is getting shifted. res.info['meas_data']={res.info['meas_date']}")
             res.set_meas_date(res.info['meas_date'] + PR10_TIME_SHIFT)
             self.t0, self.tf = self.t0 + PR10_TIME_SHIFT, self.tf + PR10_TIME_SHIFT
+            print(f"The file concatenating the following files has been shifted to res.info['meas_date']={res.info['meas_date']}\n{interval_files}")
 
         return res
 
