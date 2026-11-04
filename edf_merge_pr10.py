@@ -317,7 +317,11 @@ def csv_parse_nights(
                 curr_interval = Interval()
                 curr_night = Night()
                 # Update [start, end] time interval for next night
-                start = round_day(curr_time_start).replace(hour=night_start_hour, minute=0, second=0, microsecond=0)  # Set start date and time
+                # rounding doesnt work due to time jump on PR10_0554
+                # start = round_day(curr_time_start).replace(hour=night_start_hour, minute=0, second=0, microsecond=0)  # Set start date and time
+                start = curr_time_start.replace(
+                    hour=night_start_hour, minute=0, second=0, microsecond=0
+                )
                 end = start + night_duration
                 continue
             # (3) We've reached a new interval, only set 't0' for the first file in an interval!
