@@ -1,6 +1,6 @@
 """
 Usage (all absolute paths):
-    python edf_merge_pr10.py ~/ray/ucsf/data_store2/presidio/nihon_kohden/PR10 ~/ray/ucsf/data_store2/presidio/nihon_kohden/PR04/catalogs/sub-P104_edf-catalog.csv out-PR10-11.3.26 --local
+    python edf_merge_pr10.py ~/ray/ucsf/data_store2/presidio/nihon_kohden/PR10 ~/ray/ucsf/data_store2/presidio/nihon_kohden/PR10/catalogs/sub-PR10_edf-catalog.csv out-PR10-11.3.26 --local
     submit_job -q pia-batch.q -c 8 -m 40 -o /userdata/rzhao/results-pr10.txt -n pr10 -x /userdata/rzhao/newenv/bin/python3 /userdata/rzhao/edf-merger/edf_merge_pr10.py
 
 Example - Default File Structure:
@@ -31,6 +31,14 @@ from mne.io import read_raw_edf
 from mne.export import export_raw
 from edfio import read_edf
 
+# first 553 EDFs (PR10_0001 to 0553) are dated 4 days behind the H5s (Aug 14 to 16 instead of Aug 18 to 20). Same times of day, just the wrong date.
+PR10_FLAGGED_FILE_NUMS = range(1, 554)
+PR10_TIME_SHIFT = timedelta(days=4)
+
+def is_edf_flagged_for_pr10_shift(fn):
+    patient, file_num_str = Path(fn).stem.split('_')
+    if patient == 'PR10':
+        return int(file_num_str) in PR10_FLAGGED_FILE_NUMS
 
 NIGHT_START_HOUR: int = 21  # 9pm
 # Let NIGHT_DURATION - NIGHT_MARGIN be the min length of a valid full night of recordings
@@ -118,6 +126,10 @@ class Interval:
         assert abs(res.info['meas_date'] - self.t0) < timedelta(seconds=1), f"\nres.info['meas_date']={res.info['meas_date']}\nself.t0={self.t0}"
         # assert abs(res.duration - expected_seconds) < 5, f"\nres.duration={res.duration}\nexpected_seconds={expected_seconds}"
         assert res.n_times == round(res.duration * S_FREQ), f"res.n_times = {res.n_times}, round(res.duration * S_FREQ) = {round(res.duration * S_FREQ)}"
+
+        if is_edf_flagged_for_pr10_shift(interval_files[0]) and is_edf_flagged_for_pr10_shift(interval_files[-1]):
+            res.set_meas_date(res.info['meas_date'] + PR10_TIME_SHIFT)
+            self.t0, self.tf = self.t0 + PR10_TIME_SHIFT, self.tf + PR10_TIME_SHIFT
 
         return res
 
@@ -432,7 +444,7 @@ def verify_night_ranges(patient, nights):
             range(21, 153),
             range(483, 615),
             range(771, 903),
-            range(1058, 1192), # 134 files
+            range(1058, 1192),
             range(1347, 1479),
             range(1633, 1765),
             range(1920, 2052),
@@ -507,17 +519,18 @@ def verify_night_ranges(patient, nights):
             verify_night(i, exp)
 
     def verify_pr10():
-        """Total 9 nights."""
+        """Total 10 nights."""
         exp = (
-            range(55, 187),
-            range(339, 471),
-            range(625, 757),
-            range(911, 1043),
-            range(1197, 1329),
-            range(1483, 1615),
-            range(1768, 1900),
-            range(2053, 2185),
-            range(2338, 2470)
+            range(34, 166),
+            range(311, 443),
+            range(588, 720),
+            range(866, 998),
+            range(1149, 1281),
+            range(1432, 1564),
+            range(1715, 1847),
+            range(2001, 2133),
+            range(2284, 2416),
+            range(2570, 2702),
         )
         for i, exp in enumerate(exp):
             verify_night(i, exp)
@@ -605,7 +618,7 @@ def get_patient_csv_key(patient_id: str):
                 edf_path=7,
                 ch_names=None,
             )
-        case 'PR04':
+        case 'PR10':
             key = dict(
                 start=1,
                 end=2,
@@ -701,7 +714,7 @@ def get_server_run_inputs(patient):
             return [
                 '/data_store2/presidio/nihon_kohden/PR10', 
                 '/data_store2/presidio/nihon_kohden/PR10/catalogs/sub-PR10_edf-catalog.csv',
-                '/userdata/rzhao/out-PR010-11.3.26',
+                '/userdata/rzhao/out-PR10-11.3.26',
                 ]
 
 def get_channel_info(patient, channels: dict[str, str]):
@@ -827,14 +840,14 @@ if __name__ == "__main__":
             # If `interval.t0 is None`, then that interval never reached a starting point.
             if not interval.files or not interval.t0:
                 continue
-            t0_str, tf_str = interval.t0.strftime("%Y-%m-%d_%H.%M"), interval.tf.strftime("%Y-%m-%d_%H.%M")
-            out_path = path['output'].joinpath(f'{patient_name}_night_{night.idx+1}.{interval.idx+1}_scalp_{t0_str}--{tf_str}')
             channel_info = get_channel_info(patient_name, CHANNELS)
             res = interval.edf_concatenate(
                 channel_dict=channel_info, 
                 path=path, 
                 local=args.local
             )
+            t0_str, tf_str = interval.t0.strftime("%Y-%m-%d_%H.%M"), interval.tf.strftime("%Y-%m-%d_%H.%M")
+            out_path = path['output'].joinpath(f'{patient_name}_night_{night.idx+1}.{interval.idx+1}_scalp_{t0_str}--{tf_str}')
             export_edf(res, channel_info, out_path, mode='bipolar', overwrite_existing=True)
 
     timer_end = time.time()
